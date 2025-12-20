@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plataforma de Extracción Bibliográfica</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Plataforma de Extracción Bibliográfica</h1>
+            <p>Extrae información bibliográfica de PDFs y referencias</p>
+        </header>
+
+        <main>
+            <div class="tabs">
+                <button class="tab-button active" onclick="switchTab('pdf')">Subir PDF</button>
+                <button class="tab-button" onclick="switchTab('reference')">Subir Referencia</button>
+                <button class="tab-button" onclick="switchTab('references-pdf')">PDF de Referencias</button>
+                <button class="tab-button" onclick="switchTab('documents')">Ver Documentos</button>
+            </div>
+
+            <!-- Tab: Subir PDF -->
+            <div id="pdf-tab" class="tab-content active">
+                <div class="card">
+                    <h2>Subir PDF</h2>
+                    <form id="pdf-form">
+                        <div class="form-group">
+                            <label for="pdf-file">Seleccionar archivo PDF:</label>
+                            <input type="file" id="pdf-file" name="file" accept=".pdf" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Procesar PDF</button>
+                    </form>
+                    <div id="pdf-result" class="result"></div>
+                </div>
+            </div>
+
+            <!-- Tab: Subir Referencia -->
+            <div id="reference-tab" class="tab-content">
+                <div class="card">
+                    <h2>Subir Referencia Bibliográfica</h2>
+                    <form id="reference-form">
+                        <div class="form-group">
+                            <label for="reference-text">Ingresar referencia bibliográfica (puedes pegar múltiples, una por línea):</label>
+                            <textarea id="reference-text" name="reference_text" rows="5" 
+                                placeholder="Ejemplo: Smith, J., Doe, A. (2023). Title of the article. Journal Name, 10(2), 123-145. https://doi.org/10.1234/example" 
+                                required></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Procesar Referencia(s)</button>
+                    </form>
+                    <div id="reference-result" class="result"></div>
+                </div>
+            </div>
+
+            <!-- Tab: PDF de Referencias -->
+            <div id="references-pdf-tab" class="tab-content">
+                <div class="card">
+                    <h2>Subir PDF con Referencias Bibliográficas</h2>
+                    <p style="margin-bottom: 20px; color: #666;">
+                        Sube un PDF que contenga una sección de referencias bibliográficas. 
+                        El sistema extraerá automáticamente todas las referencias del documento.
+                    </p>
+                    <form id="references-pdf-form">
+                        <div class="form-group">
+                            <label for="references-pdf-file">Seleccionar archivo PDF con referencias:</label>
+                            <input type="file" id="references-pdf-file" name="file" accept=".pdf" required>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Extraer Referencias del PDF</button>
+                    </form>
+                    <div id="references-pdf-result" class="result"></div>
+                </div>
+            </div>
+
+            <!-- Tab: Ver Documentos -->
+            <div id="documents-tab" class="tab-content">
+                <div class="card">
+                    <h2>Documentos Extraídos</h2>
+                    <div class="actions">
+                        <button onclick="loadDocuments()" class="btn btn-secondary">Actualizar Lista</button>
+                        <div class="download-buttons">
+                            <button onclick="downloadData('csv')" class="btn btn-success">Descargar CSV</button>
+                            <button onclick="downloadData('excel')" class="btn btn-success">Descargar Excel</button>
+                            <button onclick="downloadData('json')" class="btn btn-success">Descargar JSON</button>
+                        </div>
+                    </div>
+                    <div id="documents-list" class="documents-list"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>
+
