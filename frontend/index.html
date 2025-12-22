@@ -27,8 +27,9 @@
                     <h2>Subir PDF</h2>
                     <form id="pdf-form">
                         <div class="form-group">
-                            <label for="pdf-file">Seleccionar archivo PDF:</label>
-                            <input type="file" id="pdf-file" name="file" accept=".pdf" required>
+                            <label for="pdf-file">Seleccionar archivo(s) PDF:</label>
+                            <input type="file" id="pdf-file" name="file" accept=".pdf" multiple required>
+                            <small style="color: #666; display: block; margin-top: 5px;">Puedes seleccionar múltiples archivos PDF</small>
                         </div>
                         <button type="submit" class="btn btn-primary">Procesar PDF</button>
                     </form>

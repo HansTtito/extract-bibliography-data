@@ -307,6 +307,47 @@ python clear_database.py all
 
 ⚠️ **Advertencia**: Estas operaciones eliminan datos permanentemente. Asegúrate de tener backups si es necesario.
 
+## Procesamiento Batch (Sin Interfaz Web)
+
+Scripts para procesar múltiples archivos desde carpetas locales sin necesidad de la interfaz web:
+
+### Procesar Múltiples PDFs
+
+```bash
+# Procesar todos los PDFs de una carpeta
+python batch_process_pdfs.py ./pdfs
+
+# Guardar resultados en base de datos
+python batch_process_pdfs.py ./pdfs --save-db
+
+# Sin buscar en CrossRef
+python batch_process_pdfs.py ./pdfs --no-crossref
+
+# Especificar carpeta de salida
+python batch_process_pdfs.py ./pdfs --output-dir ./resultados
+```
+
+### Procesar Referencias desde PDFs o Archivos de Texto
+
+```bash
+# Procesar PDFs con referencias
+python batch_process_references.py ./referencias
+
+# Procesar archivo de texto (una referencia por línea)
+python batch_process_references.py ./referencias.txt --save-db
+
+# Procesar carpeta completa (PDFs y .txt)
+python batch_process_references.py ./carpeta_referencias --save-db
+```
+
+**Opciones disponibles:**
+- `--save-db`: Guarda resultados en la base de datos
+- `--no-crossref`: No busca en CrossRef
+- `--output FILE`: Especifica archivo de salida JSON
+- `--output-dir DIR`: Especifica carpeta de salida
+
+Los resultados se guardan en formato JSON con toda la información extraída.
+
 ## Licencia
 
 Este proyecto es de código abierto.

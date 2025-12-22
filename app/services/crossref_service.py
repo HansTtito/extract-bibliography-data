@@ -72,7 +72,14 @@ class CrossRefService:
         # Título
         titles = crossref_data.get('title', [])
         if titles:
-            doc['titulo_original'] = normalize_text(titles[0])
+            title = normalize_text(titles[0])
+            # Corregir encoding común: "á;" -> "á"
+            if title:
+                title = title.replace('á;', 'á').replace('é;', 'é').replace('í;', 'í')
+                title = title.replace('ó;', 'ó').replace('ú;', 'ú').replace('ñ;', 'ñ')
+                title = title.replace('Á;', 'Á').replace('É;', 'É').replace('Í;', 'Í')
+                title = title.replace('Ó;', 'Ó').replace('Ú;', 'Ú').replace('Ñ;', 'Ñ')
+            doc['titulo_original'] = title
         
         # DOI
         if 'DOI' in crossref_data:
@@ -85,9 +92,14 @@ class CrossRefService:
             doc['link'] = f"https://doi.org/{crossref_data['DOI']}"
         
         # Lugar de publicación (journal o container)
+        # Puede venir en diferentes formatos
         container = crossref_data.get('container-title', [])
         if container:
-            doc['lugar_publicacion_entrega'] = normalize_text(container[0])
+            # Tomar el primer título de contenedor (generalmente la revista)
+            if isinstance(container, list) and len(container) > 0:
+                doc['lugar_publicacion_entrega'] = normalize_text(container[0])
+            elif isinstance(container, str):
+                doc['lugar_publicacion_entrega'] = normalize_text(container)
         
         # Publicista/Editorial
         publisher = crossref_data.get('publisher')
@@ -99,26 +111,38 @@ class CrossRefService:
         if volume:
             doc['volumen_edicion'] = str(volume)
         
-        # Número de artículo
+        # Número de artículo/capítulo/informe (issue)
         issue = crossref_data.get('issue')
         if issue:
             doc['numero_articulo_capitulo_informe'] = str(issue)
         
         # Páginas
+        # Puede venir como string "123-456" o como lista
         page = crossref_data.get('page')
         if page:
-            doc['paginas'] = page
+            if isinstance(page, str):
+                doc['paginas'] = page
+            elif isinstance(page, list) and len(page) > 0:
+                doc['paginas'] = str(page[0])
         
         # ISBN/ISSN
         isbn = crossref_data.get('ISBN', [])
         issn = crossref_data.get('ISSN', [])
         if isbn:
-            doc['isbn_issn'] = isbn[0]
+            # Puede ser lista o string
+            if isinstance(isbn, list) and len(isbn) > 0:
+                doc['isbn_issn'] = isbn[0] if isinstance(isbn[0], str) else str(isbn[0])
+            elif isinstance(isbn, str):
+                doc['isbn_issn'] = isbn
         elif issn:
-            doc['isbn_issn'] = issn[0]
+            # Puede ser lista o string
+            if isinstance(issn, list) and len(issn) > 0:
+                doc['isbn_issn'] = issn[0] if isinstance(issn[0], str) else str(issn[0])
+            elif isinstance(issn, str):
+                doc['isbn_issn'] = issn
         
-        # Idioma (no disponible directamente en CrossRef, usar "NA" o detectar)
-        doc['idioma'] = None  # Se puede inferir del título o contenido
+        # Idioma (no disponible directamente en CrossRef)
+        doc['idioma'] = None
         
         # Tipo documento
         doc_type = crossref_data.get('type')
@@ -128,23 +152,31 @@ class CrossRefService:
                 'book-chapter': 'Capítulo de libro',
                 'book': 'Libro',
                 'report': 'Informe técnico',
-                'dissertation': 'Tesis'
+                'dissertation': 'Tesis',
+                'proceedings-article': 'Artículo en actas',
+                'dataset': 'Conjunto de datos'
             }
             doc['tipo_documento'] = type_mapping.get(doc_type, 'Otro')
         else:
-            doc['tipo_documento'] = 'Artículo en revista científica'  # Default
+            # Inferir tipo por presencia de container-title (revista)
+            if container:
+                doc['tipo_documento'] = 'Artículo en revista científica'
+            else:
+                doc['tipo_documento'] = None
         
-        # Peer-reviewed (CrossRef no lo indica directamente, pero artículos de revista generalmente sí)
-        if doc_type == 'journal-article':
+        # Peer-reviewed (artículos de revista generalmente sí)
+        if doc_type == 'journal-article' or (not doc_type and container):
             doc['peer_reviewed'] = 'Sí'
         else:
             doc['peer_reviewed'] = None
         
         # Acceso abierto
+        # Verificar en license o en is-referenced-by-count (indicador indirecto)
         license_info = crossref_data.get('license', [])
         if license_info:
             doc['acceso_abierto'] = 'Sí'
         else:
+            # Algunos artículos tienen indicador de acceso abierto en otros campos
             doc['acceso_abierto'] = None
         
         # Keywords y Abstract (no siempre disponibles en CrossRef)

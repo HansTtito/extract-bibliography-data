@@ -19,7 +19,15 @@ class PDFExtractor:
                 for page in pdf.pages:
                     page_text = page.extract_text()
                     if page_text:
-                        full_text += page_text + "\n"
+                        # Corregir encoding común de PDFs
+                        # Algunos PDFs tienen problemas con caracteres especiales
+                        try:
+                            # Intentar decodificar correctamente
+                            if isinstance(page_text, bytes):
+                                page_text = page_text.decode('utf-8', errors='replace')
+                            full_text += page_text + "\n"
+                        except:
+                            full_text += str(page_text) + "\n"
                 
                 if not full_text:
                     return doc
@@ -100,38 +108,82 @@ class PDFExtractor:
             exclude_patterns = [
                 r'^Vol\.?\s*\d+',  # "Vol. 537"
                 r'^\d+:\s*\d+-\d+',  # "247-263"
-                r'MARINE ECOLOGY|JOURNAL OF|PROGRESS SERIES',  # Nombres de revistas comunes
+                r'MARINE ECOLOGY|JOURNAL OF|PROGRESS SERIES|PLOS ONE',  # Nombres de revistas comunes
                 r'©\s+',  # Copyright
                 r'@.*\.(com|edu|org)',  # Emails
+                r'^RESEARCH ARTICLE|^REVIEW ARTICLE',  # Tipos de artículo
             ]
             
-            # Buscar líneas grandes o en negrita (heurística: primeras líneas significativas)
-            lines = first_page_text.split('\n')[:20]  # Primeras 20 líneas
-            for line in lines:
+            # Buscar título: generalmente es la línea más larga y significativa antes de los autores
+            lines = first_page_text.split('\n')[:30]  # Primeras 30 líneas
+            
+            # Buscar línea que parezca título (larga, no es autor, no es metadata)
+            title_candidates = []
+            for i, line in enumerate(lines):
                 line = line.strip()
-                # Título generalmente tiene cierta longitud y no es solo números
-                if 15 < len(line) < 300:
-                    # Excluir si coincide con patrones de header/footer
-                    should_exclude = False
-                    for pattern in exclude_patterns:
-                        if re.search(pattern, line, re.IGNORECASE):
-                            should_exclude = True
-                            break
-                    
-                    if should_exclude:
-                        continue
-                    
-                    # No debe ser autor, año, o metadata común
-                    if (not re.match(r'^\d{4}$', line) and 
-                        'doi:' not in line.lower() and
-                        not line.lower().startswith('author') and
-                        not line.lower().startswith('abstract') and
-                        not re.match(r'^[A-Z][a-z]+,?\s*[A-Z]\.', line) and
-                        '@' not in line):  # No debe contener email
-                        # Intentar agregar espacios entre palabras que están juntas
-                        if re.search(r'[a-z][A-Z]', line):  # Hay minúscula seguida de mayúscula
-                            line = re.sub(r'([a-z])([A-Z])', r'\1 \2', line)
-                        return line
+                
+                # Excluir líneas muy cortas o muy largas
+                if len(line) < 20 or len(line) > 600:
+                    continue
+                # Excluir si coincide con patrones de header/footer
+                should_exclude = False
+                for pattern in exclude_patterns:
+                    if re.search(pattern, line, re.IGNORECASE):
+                        should_exclude = True
+                        break
+                
+                if should_exclude:
+                    continue
+                
+                # No debe ser autor (patrón: Apellido, Inicial.)
+                if re.match(r'^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?,\s*[A-Z]\.', line):
+                    continue
+                
+                # No debe ser año solo
+                if re.match(r'^\d{4}$', line):
+                    continue
+                
+                # No debe contener email
+                if '@' in line:
+                    continue
+                
+                # No debe ser "doi:" o similar
+                if 'doi:' in line.lower() and len(line) < 50:
+                    continue
+                
+                # No debe empezar con "Author", "Abstract", etc.
+                if re.match(r'^(Author|Abstract|Summary|Keywords|Received|Accepted|Published|Editor|Citation|RESEARCH ARTICLE|REVIEW ARTICLE)', line, re.IGNORECASE):
+                    continue
+                
+                # Si la línea es significativamente larga y parece título, agregarla como candidato
+                if len(line) > 30:
+                    # Intentar agregar espacios entre palabras que están juntas
+                    if re.search(r'[a-z][A-Z]', line):  # Hay minúscula seguida de mayúscula
+                        line = re.sub(r'([a-z])([A-Z])', r'\1 \2', line)
+                    title_candidates.append((i, line, len(line)))
+            
+            # Si hay candidatos, tomar el primero (más probable que sea el título)
+            if title_candidates:
+                # Ordenar por posición (más arriba = mejor) y longitud
+                title_candidates.sort(key=lambda x: (x[0], -x[2]))
+                title = title_candidates[0][1]
+                
+                # Si el título está cortado, intentar buscar líneas siguientes que lo continúen
+                title_idx = title_candidates[0][0]
+                if title_idx + 1 < len(lines):
+                    # Verificar si la siguiente línea es continuación del título
+                    next_line = lines[title_idx + 1].strip()
+                    # Si la siguiente línea no es autor ni metadata, podría ser continuación
+                    if (len(next_line) > 10 and 
+                        not re.match(r'^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?,\s*[A-Z]\.', next_line) and
+                        not re.match(r'^\d{4}$', next_line) and
+                        '@' not in next_line and
+                        'doi:' not in next_line.lower() and
+                        not re.match(r'^(Author|Abstract|Summary|Keywords)', next_line, re.IGNORECASE)):
+                        # Podría ser continuación del título
+                        title = title + " " + next_line
+                
+                return title
         
         return None
     
@@ -149,7 +201,6 @@ class PDFExtractor:
         # Buscar sección de autores común
         author_sections = [
             r'Author[s]?[:\s]+(.+?)(?:\n\n|\nAbstract|\nSummary|\nKeywords|^Abstract|^Summary)',
-            r'^([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)*(?:,\s*[A-Z]\.?)+,?\s*(?:and\s+)?[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)*(?:,\s*[A-Z]\.?)*)',
         ]
         
         for pattern in author_sections:
@@ -172,28 +223,66 @@ class PDFExtractor:
                     return normalize_text(authors)
         
         # Buscar después del título, antes del abstract
+        # Patrón mejorado para detectar nombres de autores
         abstract_pos = re.search(r'\n\s*Abstract|\n\s*Summary', text, re.IGNORECASE)
         if abstract_pos:
             # Buscar líneas entre el inicio y el abstract que parezcan autores
             before_abstract = text[:abstract_pos.start()]
-            lines = before_abstract.split('\n')[-5:]  # Últimas 5 líneas antes del abstract
-            for line in lines:
+            lines = before_abstract.split('\n')
+            
+            # Buscar líneas que tengan patrón de autores: Apellido, Inicial., Apellido, Inicial.
+            author_lines = []
+            for i, line in enumerate(lines):
                 line = line.strip()
-                # Validar que no contenga patrones excluidos
-                should_exclude = False
-                for exclude_pattern in exclude_patterns:
-                    if re.search(exclude_pattern, line, re.IGNORECASE):
-                        should_exclude = True
-                        break
                 
-                if should_exclude:
+                # Excluir líneas que son claramente parte del título o metadata
+                if (len(line) < 5 or len(line) > 600 or
+                    '@' in line or
+                    'doi:' in line.lower() or
+                    re.match(r'^\d{4}$', line) or
+                    re.match(r'^(Author|Abstract|Summary|Keywords|Received|Accepted|Published|Editor|Citation|RESEARCH ARTICLE|REVIEW ARTICLE)', line, re.IGNORECASE)):
                     continue
                 
-                # Si tiene formato de autor (nombres con iniciales o apellidos)
-                if (re.search(r'[A-Z][a-z]+\s+[A-Z]\.', line) or 
-                    re.search(r'[A-Z][a-z]+,\s*[A-Z]', line)):
-                    if 10 < len(line) < 200:
-                        return normalize_text(line)
+                # Patrón de autor: Apellido, Inicial. (puede tener múltiples autores)
+                # Ejemplo: "Porobic, J., Fulton, E.A., Parada, C."
+                # También aceptar formato: "Porobic J, Fulton EA" (sin punto después de inicial)
+                author_patterns = [
+                    r'^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?,\s*[A-Z]\.',  # "Apellido, Inicial."
+                    r'^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?,\s*[A-Z]',     # "Apellido, Inicial" (sin punto)
+                    r'^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+\s+[A-Z]\.',                                    # "Apellido Inicial." (sin coma)
+                ]
+                
+                is_author_line = False
+                for pattern in author_patterns:
+                    if re.match(pattern, line):
+                        is_author_line = True
+                        break
+                
+                if is_author_line:
+                    # Validar que no es parte del título (no debe contener palabras comunes del título)
+                    should_exclude = False
+                    for exclude_pattern in exclude_patterns:
+                        if re.search(exclude_pattern, line, re.IGNORECASE):
+                            should_exclude = True
+                            break
+                    
+                    # Excluir si contiene palabras comunes de títulos (pero no demasiado restrictivo)
+                    title_words = ['ecosystem', 'case of', 'impact', 'study', 'analysis', 'evaluation']
+                    if any(word in line.lower() for word in title_words) and len(line) > 50:
+                        should_exclude = True
+                    
+                    if not should_exclude and len(line) > 10 and len(line) < 500:
+                        author_lines.append((i, line))
+            
+            if author_lines:
+                # Ordenar por posición (más arriba = mejor)
+                author_lines.sort(key=lambda x: x[0])
+                # Unir múltiples líneas de autores
+                authors = ' '.join([line for _, line in author_lines])
+                authors = re.sub(r'\s+', ' ', authors)
+                # Limpiar comas y puntos finales
+                authors = authors.rstrip(',. ')
+                return normalize_text(authors)
         
         return None
     

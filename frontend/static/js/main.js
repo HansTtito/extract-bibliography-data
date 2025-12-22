@@ -47,30 +47,67 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
     const resultDiv = document.getElementById('pdf-result');
 
     if (!fileInput.files[0]) {
-        showResult(resultDiv, 'Por favor selecciona un archivo PDF', 'error');
+        showResult(resultDiv, 'Por favor selecciona al menos un archivo PDF', 'error');
         return;
     }
 
-    formData.append('file', fileInput.files[0]);
-    resultDiv.innerHTML = '<div class="loading">Procesando PDF...</div>';
-    resultDiv.className = 'result';
+    // Detectar si hay múltiples archivos
+    const files = Array.from(fileInput.files);
+    const hasMultiple = files.length > 1;
+    
+    console.log(`Archivos seleccionados: ${files.length}, Múltiples: ${hasMultiple}`);
 
-    try {
-        const response = await fetch(`${API_BASE}/upload-pdf`, {
-            method: 'POST',
-            body: formData
+    if (hasMultiple) {
+        // Procesar múltiples PDFs
+        // FastAPI requiere que todos los archivos tengan el mismo nombre de campo 'files'
+        files.forEach(file => {
+            formData.append('files', file);
         });
+        
+        resultDiv.innerHTML = `<div class="loading">Procesando ${files.length} PDFs...</div>`;
+        resultDiv.className = 'result';
 
-        const data = await response.json();
+        try {
+            const response = await fetch(`${API_BASE}/upload-multiple-pdfs`, {
+                method: 'POST',
+                body: formData
+            });
 
-        if (response.ok && data.success) {
-            showPDFResult(resultDiv, data.document);
-            fileInput.value = ''; // Reset form
-        } else {
-            showResult(resultDiv, data.detail || 'Error procesando PDF', 'error');
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                showMultiplePDFsResult(resultDiv, data);
+                fileInput.value = ''; // Reset form
+            } else {
+                showResult(resultDiv, data.detail || 'Error procesando PDFs', 'error');
+            }
+        } catch (error) {
+            showResult(resultDiv, `Error: ${error.message}`, 'error');
         }
-    } catch (error) {
-        showResult(resultDiv, `Error: ${error.message}`, 'error');
+    } else {
+        // Procesar un solo PDF (comportamiento original)
+        console.log('Procesando un solo PDF con /upload-pdf');
+        formData.append('file', fileInput.files[0]);
+        resultDiv.innerHTML = '<div class="loading">Procesando PDF...</div>';
+        resultDiv.className = 'result';
+
+        try {
+            const response = await fetch(`${API_BASE}/upload-pdf`, {
+                method: 'POST',
+                body: formData
+            });
+
+            const data = await response.json();
+
+            if (response.ok && data.success) {
+                showPDFResult(resultDiv, data.document);
+                fileInput.value = ''; // Reset form
+            } else {
+                showResult(resultDiv, data.detail || 'Error procesando PDF', 'error');
+            }
+        } catch (error) {
+            showResult(resultDiv, `Error: ${error.message}`, 'error');
+        }
     }
 });
 
@@ -269,6 +306,78 @@ function showMultipleReferencesResult(div, data) {
             html += '</div>';
         });
         html += '</div>';
+    }
+    
+    html += '</div>';
+    div.innerHTML = html;
+    div.className = 'result success';
+}
+
+function showMultiplePDFsResult(div, data) {
+    let html = `<div class="success-message">
+        <h3>✅ ${data.message}</h3>
+        <p><strong>Total:</strong> ${data.total} PDFs | 
+           <strong>Procesados:</strong> ${data.processed} | 
+           <strong>Errores:</strong> ${data.failed}</p>
+    </div>`;
+
+    if (data.documents && data.documents.length > 0) {
+        html += '<div class="documents-list"><h4>Documentos creados:</h4><ul>';
+        data.documents.forEach(doc => {
+            html += `<li>
+                <strong>Documento #${doc.numero_doc}</strong><br>
+                ${doc.titulo_original ? `Título: ${doc.titulo_original.substring(0, 100)}${doc.titulo_original.length > 100 ? '...' : ''}<br>` : ''}
+                ${doc.autores ? `Autores: ${doc.autores}<br>` : ''}
+                ${doc.ano ? `Año: ${doc.ano}` : ''}
+            </li>`;
+        });
+        html += '</ul></div>';
+    }
+
+    if (data.errors && data.errors.length > 0) {
+        html += '<div class="error-message"><h4>Errores:</h4><ul>';
+        data.errors.forEach(error => {
+            html += `<li>${error}</li>`;
+        });
+        html += '</ul></div>';
+    }
+
+    div.innerHTML = html;
+    div.className = 'result success';
+}
+
+function showMultiplePDFsResult(div, data) {
+    let html = '<div class="result success">';
+    html += '<strong>✓ PDFs procesados exitosamente</strong>';
+    html += `<p style="margin-top: 10px;"><strong>Total:</strong> ${data.total} | <strong>Procesados:</strong> ${data.processed} | <strong>Errores:</strong> ${data.failed}</p>`;
+    
+    if (data.documents && data.documents.length > 0) {
+        html += '<div class="result-info" style="margin-top: 15px;">';
+        html += '<h3>Documentos creados:</h3>';
+        data.documents.forEach(doc => {
+            html += '<div style="margin: 10px 0; padding: 10px; background: white; border-left: 3px solid #667eea; border-radius: 3px;">';
+            html += `<p><strong>Documento #${doc.numero_doc}</strong></p>`;
+            if (doc.titulo_original) {
+                html += `<p><strong>Título:</strong> ${doc.titulo_original.substring(0, 100)}${doc.titulo_original.length > 100 ? '...' : ''}</p>`;
+            }
+            if (doc.autores) {
+                html += `<p><strong>Autores:</strong> ${doc.autores}</p>`;
+            }
+            if (doc.ano) {
+                html += `<p><strong>Año:</strong> ${doc.ano}</p>`;
+            }
+            html += '</div>';
+        });
+        html += '</div>';
+    }
+    
+    if (data.errors && data.errors.length > 0) {
+        html += '<div class="error-message" style="margin-top: 15px; padding: 10px; background: #fee; border-left: 3px solid #f00; border-radius: 3px;">';
+        html += '<h4>Errores:</h4><ul>';
+        data.errors.forEach(error => {
+            html += `<li>${error}</li>`;
+        });
+        html += '</ul></div>';
     }
     
     html += '</div>';

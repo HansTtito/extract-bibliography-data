@@ -66,3 +66,13 @@ class ReferenceUploadResponse(BaseModel):
     document: Optional[DocumentResponse] = None
     enriched: bool = False
 
+
+class MultiplePDFsResponse(BaseModel):
+    success: bool
+    message: str
+    total: int
+    processed: int
+    failed: int
+    documents: List[DocumentResponse]
+    errors: Optional[List[str]] = None
+
