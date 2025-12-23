@@ -5,12 +5,15 @@ Convierte FastAPI a formato compatible con Lambda usando Mangum
 import os
 from mangum import Mangum
 from app.main import app
+from app.database import init_db
 
-# Configurar variables de entorno si no están definidas
-# Lambda las pasará desde la configuración de la función
-if not os.getenv("DATABASE_URL"):
-    # Esto debería venir de las variables de entorno de Lambda
-    pass
+# Inicializar base de datos al cargar el módulo (una vez por container)
+# Esto crea las tablas si no existen
+try:
+    init_db()
+    print("✅ Base de datos inicializada correctamente")
+except Exception as e:
+    print(f"⚠️ Error inicializando base de datos: {e}")
 
 # Mangum convierte FastAPI (ASGI) a formato compatible con Lambda
 # lifespan="off" porque Lambda maneja el ciclo de vida

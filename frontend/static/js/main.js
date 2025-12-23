@@ -1,8 +1,9 @@
 // Configurar API_BASE según el entorno
-// En producción, usar la URL completa del API Gateway (sin duplicar /sandbox)
+// En producción (CloudFront/AWS), usar la URL completa del API Gateway
+// En desarrollo local, usar vacío porque FastAPI ya tiene el prefijo /api en los routers
 const API_BASE = window.location.hostname.includes('cloudfront.net') || window.location.hostname.includes('amazonaws.com')
     ? 'https://rv11r9yo98.execute-api.us-east-1.amazonaws.com/sandbox'
-    : '/api';
+    : '';
 
 // Tab switching
 function switchTab(tabName) {
@@ -443,10 +444,9 @@ function showMultiplePDFsResult(div, data) {
     div.className = 'result success';
 }
 
-// References PDF Upload
+// References PDF Upload (usando S3 para evitar corrupción)
 document.getElementById('references-pdf-form').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const formData = new FormData();
     const fileInput = document.getElementById('references-pdf-file');
     const resultDiv = document.getElementById('references-pdf-result');
 
@@ -455,14 +455,54 @@ document.getElementById('references-pdf-form').addEventListener('submit', async 
         return;
     }
 
-    formData.append('file', fileInput.files[0]);
-    resultDiv.innerHTML = '<div class="loading">Extrayendo referencias del PDF...</div>';
+    const file = fileInput.files[0];
+    resultDiv.innerHTML = '<div class="loading">Subiendo PDF a S3...</div>';
     resultDiv.className = 'result';
 
     try {
-        const response = await fetch(`${API_BASE}/api/upload-references-pdf`, {
+        // Paso 1: Obtener URL presignada
+        const urlResponse = await fetch(`${API_BASE}/api/get-upload-url`, {
             method: 'POST',
-            body: formData
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                filename: file.name,
+                content_type: 'application/pdf'
+            })
+        });
+
+        if (!urlResponse.ok) {
+            const errorData = await urlResponse.json();
+            throw new Error(errorData.detail || 'Error obteniendo URL de upload');
+        }
+
+        const { upload_url, file_key } = await urlResponse.json();
+
+        // Paso 2: Subir archivo directamente a S3
+        resultDiv.innerHTML = '<div class="loading">Subiendo archivo...</div>';
+        const uploadResponse = await fetch(upload_url, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/pdf',
+            },
+            body: file
+        });
+
+        if (!uploadResponse.ok) {
+            throw new Error(`Error subiendo archivo: ${uploadResponse.status}`);
+        }
+
+        // Paso 3: Procesar referencias desde S3
+        resultDiv.innerHTML = '<div class="loading">Extrayendo referencias del PDF...</div>';
+        const response = await fetch(`${API_BASE}/api/process-s3-references-pdf`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                file_key: file_key
+            })
         });
 
         const data = await response.json();

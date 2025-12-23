@@ -52,6 +52,8 @@ class GrobidService:
             response = requests.post(
                 f"{self.grobid_url}/api/processReferences",
                 files={'input': pdf_content},
+                data={'consolidateCitations': '1'},  # Consolidar con CrossRef
+                headers={'Accept': 'application/xml'},  # Forzar respuesta XML
                 timeout=self.timeout
             )
             
@@ -85,6 +87,8 @@ class GrobidService:
             response = requests.post(
                 f"{self.grobid_url}/api/processHeaderDocument",
                 files={'input': pdf_content},
+                data={'consolidateHeader': '1'},  # Consolidar metadata con CrossRef
+                headers={'Accept': 'application/xml'},  # Forzar respuesta XML
                 timeout=self.timeout
             )
             
@@ -273,6 +277,9 @@ class GrobidService:
             
         except ET.ParseError as e:
             logger.warning(f"Error parseando XML header de GROBID: {e}")
+            # Debug: mostrar primeros 500 caracteres de la respuesta
+            preview = xml_response[:500] if xml_response else "Empty response"
+            logger.warning(f"GROBID XML Response Preview: {preview}")
         except Exception as e:
             logger.warning(f"Error procesando header de GROBID: {e}")
         

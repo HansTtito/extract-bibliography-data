@@ -415,21 +415,94 @@ class ReferencesPDFExtractor:
         text = self._normalize_text_spacing(text)
         
         # PASO 3: Limpiar headers y footers comunes
-        text = re.sub(r'Frontiers in Marine Science.*?\n', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'Volume \d+.*?\n', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'Article \d+.*?\n', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'www\.frontiersin\.org.*?\n', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'Frontiers in Marine Science.*?(?=\n|$)', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'Volume \d+.*?(?=\n|$)', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'Article \d+.*?(?=\n|$)', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'www\.frontiersin\.org.*?(?=\n|$)', '', text, flags=re.IGNORECASE)
         
-        # PASO 4: Dividir por líneas
+        # PASO 4: CLAVE - Detectar si todo está en una línea o múltiples líneas
         lines = text.split('\n')
         
         # DEBUG: Mostrar estadísticas
         print(f"  🔍 Procesando {len(lines)} líneas en _split_into_references")
         if len(lines) > 0:
-            print(f"  📄 Primera línea: '{lines[0][:80]}...'")
-            if len(lines) > 1:
-                print(f"  📄 Segunda línea: '{lines[1][:80]}...'")
+            print(f"  📄 Primera línea: {len(lines[0])} chars - '{lines[0][:80]}...'")
         
+        # Si hay solo 1 línea muy larga (más de 500 chars), probablemente las referencias están todas juntas
+        if len(lines) == 1 and len(lines[0]) > 500:
+            print(f"  ⚠️  Detectado: todas las referencias en 1 línea ({len(lines[0])} chars)")
+            print(f"  🔧 Aplicando split por patrón de inicio de referencia...")
+            
+            # MEJORADO: Buscar donde empieza una referencia completa
+            # Patrón: Apellido, Inicial. seguido de (año) o continuación con "and" o ","
+            # Debe estar precedido por el final de otra referencia (doi, páginas, etc.)
+            # Usamos lookbehind negativo para NO capturar autores en medio de una referencia
+            
+            # Buscar terminaciones de referencias (doi, páginas, año)
+            # Luego buscar el siguiente autor
+            pattern = r'(?:^|\.\s|\)\.?\s|doi:[^\s]+\s|[\d]+–[\d]+\.?\s)([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,},\s*[A-Z]\.)'
+            
+            matches = list(re.finditer(pattern, lines[0]))
+            print(f"  ✅ Encontrados {len(matches)} inicios de referencia potenciales")
+            
+            if matches and len(matches) > 1:  # Necesitamos al menos 2 para dividir
+                refs_extracted = []
+                for i, match in enumerate(matches):
+                    # Empezar desde donde comienza el apellido (group 1)
+                    start = match.start(1)
+                    # El final es el inicio de la siguiente referencia (o el final del texto)
+                    end = matches[i + 1].start(1) if i + 1 < len(matches) else len(lines[0])
+                    ref_text = lines[0][start:end].strip()
+                    
+                    if len(ref_text) > 50:  # Filtro básico de longitud
+                        refs_extracted.append(ref_text)
+                        if i < 3:  # Debug: mostrar primeras 3
+                            print(f"    {i+1}. {ref_text[:100]}...")
+                
+                if refs_extracted:
+                    print(f"  ✅ Extraídas {len(refs_extracted)} referencias del texto consolidado")
+                    return refs_extracted
+            
+            # Si no funcionó, intentar método más agresivo
+            print(f"  ⚠️  Método 1 no funcionó, probando método alternativo...")
+            
+            # Método 2: Buscar patrón más simple - solo al inicio o después de punto/doi
+            simple_pattern = r'(?:^|\.doi:[^\s]+\s+|[\d]+–[\d]+\.\s+|[\d]{4}\)\.\s*)([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{3,},\s*[A-Z]\.)'
+            matches2 = list(re.finditer(simple_pattern, lines[0]))
+            print(f"  Encontrados {len(matches2)} inicios (método 2)")
+            
+            if matches2 and len(matches2) > 1:
+                refs_extracted = []
+                for i, match in enumerate(matches2):
+                    start = match.start(1)
+                    end = matches2[i + 1].start(1) if i + 1 < len(matches2) else len(lines[0])
+                    ref_text = lines[0][start:end].strip()
+                    
+                    if len(ref_text) > 50:
+                        refs_extracted.append(ref_text)
+                        if i < 3:
+                            print(f"    {i+1}. {ref_text[:100]}...")
+                
+                if refs_extracted:
+                    print(f"  ✅ Extraídas {len(refs_extracted)} referencias (método 2)")
+                    return refs_extracted
+            
+            # Último recurso: dividir por años
+            print(f"  ⚠️  Usando último recurso: dividir por años...")
+            year_pattern = r'(\(\d{4}\)|\s\d{4}[\.,])'
+            parts = re.split(year_pattern, lines[0])
+            print(f"  🔧 Dividiendo por años: {len(parts)} partes")
+            
+            # Reconstruir referencias juntando parte + año
+            for i in range(0, len(parts) - 1, 2):
+                if i + 1 < len(parts):
+                    ref_text = (parts[i] + parts[i + 1]).strip()
+                    if len(ref_text) > 50:
+                        references.append(ref_text)
+            
+            return references
+        
+        # Si hay múltiples líneas, usar el método original (línea por línea)
         current_ref = []
         new_ref_count = 0
         

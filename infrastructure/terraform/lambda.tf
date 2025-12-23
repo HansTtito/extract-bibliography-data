@@ -78,11 +78,11 @@ resource "aws_lambda_function" "main" {
 
   environment {
     variables = {
-      DATABASE_URL      = "postgresql://${aws_db_instance.main.username}:${aws_db_instance.main.password}@${aws_db_instance.main.endpoint}/${aws_db_instance.main.db_name}"
+      DATABASE_URL      = "postgresql://${aws_rds_cluster.main.master_username}:${aws_rds_cluster.main.master_password}@${aws_rds_cluster.main.endpoint}/${aws_rds_cluster.main.database_name}"
       CROSSREF_EMAIL    = var.crossref_email
       USE_GROBID        = "true"
-      GROBID_URL        = var.grobid_deployment == "fargate" ? "http://${aws_lb.grobid[0].dns_name}:8070" : (var.grobid_deployment == "ec2" ? "http://${aws_instance.grobid[0].public_ip}:8070" : "")
-      GROBID_TIMEOUT    = "30"
+      GROBID_URL        = var.grobid_deployment == "fargate" ? "http://${aws_lb.grobid[0].dns_name}:8070" : (var.grobid_deployment == "ec2" ? "http://${aws_instance.grobid[0].private_ip}:8070" : "")
+      GROBID_TIMEOUT    = "120"
       MAX_PDF_SIZE_MB   = "10"
       MAX_BATCH_COUNT   = "10"
       MAX_BATCH_TOTAL_MB = "50"
@@ -162,7 +162,7 @@ resource "aws_lambda_function" "export" {
 
   environment {
     variables = {
-      DATABASE_URL    = "postgresql://${aws_db_instance.main.username}:${aws_db_instance.main.password}@${aws_db_instance.main.endpoint}/${aws_db_instance.main.db_name}"
+      DATABASE_URL    = "postgresql://${aws_rds_cluster.main.master_username}:${aws_rds_cluster.main.master_password}@${aws_rds_cluster.main.endpoint}/${aws_rds_cluster.main.database_name}"
       ALLOWED_ORIGINS = "https://${aws_cloudfront_distribution.frontend.domain_name}"
     }
   }

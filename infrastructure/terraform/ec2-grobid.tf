@@ -4,7 +4,7 @@ resource "aws_instance" "grobid" {
   count = var.grobid_deployment == "ec2" ? 1 : 0
 
   ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = "t3.small"
+  instance_type          = "t3.medium"  # 4GB RAM para GROBID
   key_name               = var.key_pair_name
   vpc_security_group_ids = [aws_security_group.grobid_ec2[0].id]
   subnet_id              = length(local.public_subnets_final) > 0 ? local.public_subnets_final[0] : null

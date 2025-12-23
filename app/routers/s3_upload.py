@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from app.database import get_db
 from app.config import settings
+from app.models import Document
 import boto3
 from botocore.exceptions import ClientError
 import uuid
@@ -70,6 +71,126 @@ async def get_presigned_upload_url(
 
 class ProcessS3FileRequest(BaseModel):
     file_key: str
+
+
+@router.post("/process-s3-references-pdf")
+async def process_s3_references_pdf(
+    request: ProcessS3FileRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    Procesa un PDF con referencias bibliográficas que ya fue subido a S3.
+    Extrae todas las referencias del PDF y las guarda en la BD.
+    """
+    from app.services.references_pdf_extractor import ReferencesPDFExtractor
+    from app.services.reference_parser import ReferenceParser
+    from app.services.crossref_service import CrossRefService
+    from app.schemas import MultipleReferencesResponse, DocumentResponse
+    
+    references_extractor = ReferencesPDFExtractor()
+    reference_parser = ReferenceParser()
+    crossref_service = CrossRefService()
+    
+    try:
+        # Descargar PDF desde S3
+        response = s3_client.get_object(
+            Bucket=settings.s3_bucket,
+            Key=request.file_key
+        )
+        pdf_content = response['Body'].read()
+        
+        # Extraer referencias usando GROBID (si está disponible) o regex
+        references = references_extractor.extract_references(pdf_content)
+        
+        if not references:
+            raise HTTPException(
+                status_code=400,
+                detail="No se pudieron extraer referencias del PDF. Verifica que el PDF contenga una sección de referencias."
+            )
+        
+        # Procesar cada referencia
+        processed_docs = []
+        failed_count = 0
+        
+        for idx, ref_text in enumerate(references, 1):
+            try:
+                print(f"[REF {idx}] Texto extraído: {ref_text[:200]}...")
+                
+                # Parse reference
+                parsed_ref = reference_parser.parse(ref_text)
+                print(f"[REF {idx}] Parsed data: {parsed_ref}")
+                
+                # Validar que al menos tenga título o autores
+                if not parsed_ref.get('titulo_original') and not parsed_ref.get('autores'):
+                    print(f"[REF {idx}] SKIP: No tiene título ni autores")
+                    failed_count += 1
+                    continue
+                
+                # Try to enrich with CrossRef if we have DOI
+                if parsed_ref.get('doi'):
+                    try:
+                        crossref_data = crossref_service.search_by_doi(parsed_ref['doi'])
+                        if crossref_data:
+                            parsed_ref.update(crossref_data)
+                            print(f"[REF {idx}] Enriquecida con CrossRef")
+                    except Exception as ce:
+                        print(f"[REF {idx}] CrossRef error: {ce}")
+                        pass
+                
+                # Get next numero_doc
+                last_doc = db.query(Document).order_by(Document.numero_doc.desc()).first()
+                next_numero = (last_doc.numero_doc + 1) if last_doc else 1
+                
+                # Create document
+                document = Document(
+                    numero_doc=next_numero,
+                    autores=parsed_ref.get('autores'),
+                    ano=parsed_ref.get('ano'),
+                    titulo_original=parsed_ref.get('titulo_original'),
+                    lugar_publicacion_entrega=parsed_ref.get('lugar_publicacion_entrega'),
+                    publicista_editorial=parsed_ref.get('editorial'),
+                    volumen_edicion=parsed_ref.get('volumen_edicion'),
+                    paginas=parsed_ref.get('paginas'),
+                    doi=parsed_ref.get('doi'),
+                    isbn_issn=parsed_ref.get('isbn_issn')
+                )
+                
+                db.add(document)
+                db.commit()
+                db.refresh(document)
+                
+                print(f"[REF {idx}] ✓ Guardada: {document.titulo_original or document.autores}")
+                processed_docs.append(DocumentResponse.model_validate(document))
+                
+            except Exception as e:
+                import traceback
+                failed_count += 1
+                print(f"[REF {idx}] ERROR: {e}")
+                print(f"[REF {idx}] Traceback: {traceback.format_exc()}")
+                db.rollback()  # Rollback en caso de error
+                continue
+        
+        return MultipleReferencesResponse(
+            success=True,
+            message=f"Extraídas y procesadas {len(processed_docs)} de {len(references)} referencias del PDF",
+            total=len(references),
+            processed=len(processed_docs),
+            failed=failed_count,
+            documents=processed_docs
+        )
+        
+    except ClientError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Archivo no encontrado en S3: {str(e)}"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error procesando PDF de referencias: {str(e)}"
+        )
 
 
 @router.post("/process-s3-pdf")
@@ -153,7 +274,7 @@ async def process_s3_pdf(
             keywords=extracted_data.get('keywords'),
             resumen_abstract=extracted_data.get('resumen_abstract'),
             lugar_publicacion_entrega=extracted_data.get('lugar_publicacion_entrega'),
-            editorial=extracted_data.get('editorial'),
+            publicista_editorial=extracted_data.get('editorial'),
             volumen_edicion=extracted_data.get('volumen_edicion'),
             isbn_issn=extracted_data.get('isbn_issn'),
             numero_articulo_capitulo_informe=extracted_data.get('numero_articulo_capitulo_informe'),

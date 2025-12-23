@@ -106,6 +106,9 @@ class PDFExtractor:
                 # Intentar extraer keywords
                 keywords = self._extract_keywords(full_text)
                 if keywords:
+                    # Normalizar espacios entre palabras concatenadas
+                    from app.utils.text_processing import normalize_text_spacing
+                    keywords = normalize_text_spacing(keywords)
                     doc['keywords'] = normalize_text(keywords)
                 
                 # Intentar extraer información de publicación
@@ -356,8 +359,13 @@ class PDFExtractor:
             match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
             if match:
                 keywords = match.group(1).strip()
-                # Limpiar y limitar
+                # Limpiar saltos de línea
                 keywords = re.sub(r'\s+', ' ', keywords)
+                
+                # Si las keywords están separadas por comas, agregar espacio después de cada coma
+                if ',' in keywords:
+                    keywords = re.sub(r',\s*', ', ', keywords)
+                
                 if 5 < len(keywords) < 500:
                     return keywords
         

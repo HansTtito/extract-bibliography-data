@@ -21,8 +21,8 @@ output "pdfs_bucket" {
 }
 
 output "rds_endpoint" {
-  description = "Endpoint de RDS PostgreSQL"
-  value       = aws_db_instance.main.endpoint
+  description = "Endpoint de Aurora PostgreSQL"
+  value       = aws_rds_cluster.main.endpoint
   sensitive   = true
 }
 
