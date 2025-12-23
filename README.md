@@ -14,11 +14,11 @@ Plataforma backend con FastAPI para extraer información bibliográfica de PDFs 
 
 ## 🚀 Despliegue en la Nube
 
-Para desplegar esta aplicación en la nube, consulta la [Guía de Despliegue](DEPLOY.md) que incluye instrucciones para:
+Para desplegar esta aplicación en la nube, consulta la [Guía de Despliegue](docs/DEPLOY.md) que incluye instrucciones para:
 
 - **Railway** (Recomendado - Más fácil)
 - **Render**
-- **AWS** (Elastic Beanstalk, ECS, EC2)
+- **AWS** (Elastic Beanstalk, ECS, EC2, Lambda)
 - **Google Cloud Platform**
 - **Heroku**
 
@@ -26,9 +26,9 @@ La aplicación incluye un `Dockerfile` listo para usar en cualquier plataforma q
 
 ### 🤔 ¿EC2 o Serverless?
 
-Para un análisis detallado de arquitecturas y recomendaciones según tu caso de uso, consulta [ARCHITECTURE.md](ARCHITECTURE.md). Incluye comparación de costos, ventajas/desventajas, y recomendaciones específicas para aplicaciones que procesan PDFs.
+Para un análisis detallado de arquitecturas y recomendaciones según tu caso de uso, consulta [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Incluye comparación de costos, ventajas/desventajas, y recomendaciones específicas para aplicaciones que procesan PDFs.
 
-**💡 Si solo usas la app unas cuantas veces al mes**: Serverless (Lambda) es la mejor opción - ahorra ~$32/mes vs EC2. Ver [DEPLOY_LAMBDA.md](DEPLOY_LAMBDA.md) para guía completa de despliegue en Lambda.
+**💡 Si solo usas la app unas cuantas veces al mes**: Serverless (Lambda) es la mejor opción - ahorra ~$32/mes vs EC2. Ver [docs/DEPLOY_LAMBDA.md](docs/DEPLOY_LAMBDA.md) para guía completa de despliegue en Lambda.
 
 ## Requisitos
 
@@ -59,7 +59,7 @@ pip install -r requirements.txt
 
    Opción B: Usar Docker Compose (ver sección Docker)
 
-> 💡 **Colaboración**: Si quieres que otras personas usen la misma base de datos, consulta [COLABORACION.md](COLABORACION.md) para diferentes escenarios.
+> 💡 **Colaboración**: Si quieres que otras personas usen la misma base de datos o compartir la aplicación, consulta [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) para diferentes escenarios.
 
 5. **Configurar variables de entorno**:
    - Copiar `.env.example` a `.env`
@@ -158,7 +158,7 @@ GET /api/download/json
 
 ```
 extract-bibliografia/
-├── app/
+├── app/                        # Código de la aplicación
 │   ├── __init__.py
 │   ├── main.py                 # Punto de entrada FastAPI
 │   ├── config.py               # Configuración
@@ -168,24 +168,53 @@ extract-bibliografia/
 │   ├── routers/                # Endpoints
 │   │   ├── pdf_upload.py
 │   │   ├── reference_upload.py
+│   │   ├── references_pdf_upload.py
 │   │   ├── documents.py
 │   │   └── download.py
 │   ├── services/               # Lógica de negocio
 │   │   ├── pdf_extractor.py
 │   │   ├── reference_parser.py
+│   │   ├── references_pdf_extractor.py
 │   │   ├── crossref_service.py
 │   │   └── export_service.py
 │   └── utils/                  # Utilidades
+│       ├── patterns.py
 │       └── text_processing.py
-├── frontend/
+├── frontend/                   # Frontend web
 │   ├── index.html
 │   └── static/
 │       ├── css/
 │       │   └── style.css
 │       └── js/
 │           └── main.js
+├── scripts/                     # Scripts de utilidad
+│   ├── batch_process_pdfs.py
+│   ├── batch_process_references.py
+│   ├── clear_database.py
+│   └── debug_references_extraction.py
+├── tests/                       # Tests
+│   ├── test_pdf_extraction.py
+│   ├── test_reference_parser.py
+│   ├── test_references_extraction.py
+│   └── test_references_detailed.py
+├── docs/                       # Documentación
+│   ├── ARCHITECTURE.md
+│   ├── DEPLOY.md
+│   ├── DEPLOY_LAMBDA.md
+│   ├── REMOTE_ACCESS.md
+│   ├── SETUP_DATABASE.md
+│   ├── TESTING.md
+│   └── IMPROVEMENTS.md
+├── infrastructure/             # Infraestructura (Terraform, Docker, etc.)
+│   ├── grobid/                 # Configuración GROBID
+│   ├── terraform/              # Terraform configs
+│   ├── build_lambda.ps1
+│   └── build_lambda.sh
 ├── requirements.txt
-├── .env.example
+├── docker-compose.yml
+├── Dockerfile
+├── lambda_handler.py
+├── run.py
 └── README.md
 ```
 
@@ -243,101 +272,99 @@ ngrok http 8001
 
 Los demás solo necesitan abrir esa URL en su navegador. 
 
-📖 **Guías:**
-- [Inicio Rápido](QUICK_START_NGROK.md) - Configuración en 5 minutos
-- [Guía Completa](SHARE_TEMPORAL.md) - Más opciones y detalles
+📖 **Guía completa:** [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) - Incluye ngrok, compartir base de datos, y escenarios de colaboración
 
 ## Scripts de Prueba
 
-Puedes probar los extractores directamente sin levantar el servidor:
+Puedes probar los extractores directamente sin levantar el servidor. Los scripts están en la carpeta `tests/`:
 
 ### Probar Extracción de PDF Individual
 ```bash
 # Extraer información de un PDF
-python test_pdf_extraction.py documento.pdf
+python tests/test_pdf_extraction.py documento.pdf
 
 # Con búsqueda en CrossRef (si hay DOI)
-python test_pdf_extraction.py documento.pdf --with-crossref
+python tests/test_pdf_extraction.py documento.pdf --with-crossref
 ```
 
 ### Probar Extracción de Referencias de un PDF
 ```bash
 # Extraer todas las referencias de un PDF
-python test_references_extraction.py referencias.pdf
+python tests/test_references_extraction.py referencias.pdf
 
 # También parsear cada referencia
-python test_references_extraction.py referencias.pdf --parse
+python tests/test_references_extraction.py referencias.pdf --parse
 
 # Guardar resultados en JSON
-python test_references_extraction.py referencias.pdf --parse --save
+python tests/test_references_extraction.py referencias.pdf --parse --save
 
 # Limitar a las primeras 5 referencias
-python test_references_extraction.py referencias.pdf --limit 5
+python tests/test_references_extraction.py referencias.pdf --limit 5
 ```
 
 ### Probar Parser de Referencias (Texto)
 ```bash
 # Parsear una referencia en texto
-python test_reference_parser.py "Smith, J., 2020. Title. Journal, 10, 123-145."
+python tests/test_reference_parser.py "Smith, J., 2020. Title. Journal, 10, 123-145."
 
 # Con búsqueda en CrossRef
-python test_reference_parser.py "Smith, J., 2020. Title. Journal, 10, 123-145." --with-crossref
+python tests/test_reference_parser.py "Smith, J., 2020. Title. Journal, 10, 123-145." --with-crossref
 ```
 
 ## Limpiar Base de Datos
 
-Para limpiar la base de datos, usa el script `clear_database.py`:
+Para limpiar la base de datos, usa el script en `scripts/clear_database.py`:
 
 ```bash
 # Eliminar todos los registros (mantiene tablas)
-python clear_database.py clear
+python scripts/clear_database.py clear
 
 # Eliminar y recrear todas las tablas
-python clear_database.py recreate
+python scripts/clear_database.py recreate
 
 # Solo resetear contador de numero_doc
-python clear_database.py reset
+python scripts/clear_database.py reset
 
 # Ver estadísticas
-python clear_database.py stats
+python scripts/clear_database.py stats
 
 # Eliminar registros Y resetear contador
-python clear_database.py all
+python scripts/clear_database.py all
 ```
 
 ⚠️ **Advertencia**: Estas operaciones eliminan datos permanentemente. Asegúrate de tener backups si es necesario.
 
 ## Procesamiento Batch (Sin Interfaz Web)
 
-Scripts para procesar múltiples archivos desde carpetas locales sin necesidad de la interfaz web:
+Scripts para procesar múltiples archivos desde carpetas locales sin necesidad de la interfaz web. Los scripts están en la carpeta `scripts/`:
 
 ### Procesar Múltiples PDFs
 
 ```bash
 # Procesar todos los PDFs de una carpeta
-python batch_process_pdfs.py ./pdfs
+python scripts/batch_process_pdfs.py ./pdfs
 
 # Guardar resultados en base de datos
-python batch_process_pdfs.py ./pdfs --save-db
+python scripts/batch_process_pdfs.py ./pdfs --save-db
 
 # Sin buscar en CrossRef
-python batch_process_pdfs.py ./pdfs --no-crossref
+python scripts/batch_process_pdfs.py ./pdfs --no-crossref
 
 # Especificar carpeta de salida
-python batch_process_pdfs.py ./pdfs --output-dir ./resultados
+python scripts/batch_process_pdfs.py ./pdfs --output-dir ./resultados
 ```
 
 ### Procesar Referencias desde PDFs o Archivos de Texto
 
 ```bash
 # Procesar PDFs con referencias
-python batch_process_references.py ./referencias
+python scripts/batch_process_references.py ./referencias
 
 # Procesar archivo de texto (una referencia por línea)
-python batch_process_references.py ./referencias.txt --save-db
+python scripts/batch_process_references.py ./referencias.txt --save-db
 
 # Procesar carpeta completa (PDFs y .txt)
-python batch_process_references.py ./carpeta_referencias --save-db
+python scripts/batch_process_references.py ./carpeta_referencias --save-db
 ```
 
 **Opciones disponibles:**

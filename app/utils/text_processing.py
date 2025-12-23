@@ -1,5 +1,6 @@
 import re
 from typing import Optional, List
+from app.utils.patterns import BiblioPatterns, TextNormalizer
 
 
 def extract_doi(text: str) -> Optional[str]:
@@ -114,13 +115,21 @@ def normalize_text(text: Optional[str]) -> Optional[str]:
     text = re.sub(r'#_#x00([A-Fa-f0-9]{2})', lambda m: chr(int(m.group(1), 16)), text)
     text = re.sub(r'#x([A-Fa-f0-9]{2,4})', lambda m: chr(int(m.group(1), 16)), text)
     
-    # Eliminar espacios múltiples y saltos de línea
-    text = re.sub(r'\s+', ' ', text)
+    # Usar TextNormalizer para limpiar espacios
+    text = TextNormalizer.clean_multiple_spaces(text)
     
     # Limpiar caracteres de control pero mantener caracteres especiales válidos
     text = ''.join(char for char in text if ord(char) >= 32 or char in '\n\t')
     
     return text.strip() or None
+
+
+def normalize_text_spacing(text: str) -> str:
+    """
+    Normaliza espacios en texto agregando espacios entre palabras concatenadas.
+    Wrapper para TextNormalizer.normalize_spacing para mantener compatibilidad.
+    """
+    return TextNormalizer.normalize_spacing(text)
 
 
 def format_authors(authors: List[dict]) -> Optional[str]:

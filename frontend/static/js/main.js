@@ -1,4 +1,8 @@
-const API_BASE = '/api';
+// Configurar API_BASE según el entorno
+// En producción, usar la URL completa del API Gateway (sin duplicar /sandbox)
+const API_BASE = window.location.hostname.includes('cloudfront.net') || window.location.hostname.includes('amazonaws.com')
+    ? 'https://rv11r9yo98.execute-api.us-east-1.amazonaws.com/sandbox'
+    : '/api';
 
 // Tab switching
 function switchTab(tabName) {
@@ -68,10 +72,18 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
         resultDiv.className = 'result';
 
         try {
-            const response = await fetch(`${API_BASE}/upload-multiple-pdfs`, {
+            const response = await fetch(`${API_BASE}/api/upload-multiple-pdfs`, {
                 method: 'POST',
                 body: formData
             });
+
+            // Verificar si la respuesta es JSON
+            const contentType = response.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                const text = await response.text();
+                console.error('Respuesta no JSON:', text);
+                throw new Error(`Error del servidor: ${response.status} ${response.statusText}. Respuesta: ${text.substring(0, 200)}`);
+            }
 
             const data = await response.json();
 
@@ -85,21 +97,67 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
             showResult(resultDiv, `Error: ${error.message}`, 'error');
         }
     } else {
-        // Procesar un solo PDF (comportamiento original)
-        console.log('Procesando un solo PDF con /upload-pdf');
-        formData.append('file', fileInput.files[0]);
-        resultDiv.innerHTML = '<div class="loading">Procesando PDF...</div>';
+        // Procesar un solo PDF usando S3 Presigned URLs (evita corrupción de archivos)
+        const file = fileInput.files[0];
+        resultDiv.innerHTML = '<div class="loading">Subiendo PDF a S3...</div>';
         resultDiv.className = 'result';
 
         try {
-            const response = await fetch(`${API_BASE}/upload-pdf`, {
+            // Paso 1: Obtener URL presignada
+            const urlResponse = await fetch(`${API_BASE}/api/get-upload-url`, {
                 method: 'POST',
-                body: formData
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    filename: file.name,
+                    content_type: 'application/pdf'
+                })
             });
 
-            const data = await response.json();
+            if (!urlResponse.ok) {
+                const errorData = await urlResponse.json();
+                throw new Error(errorData.detail || 'Error obteniendo URL de upload');
+            }
 
-            if (response.ok && data.success) {
+            const { upload_url, file_key } = await urlResponse.json();
+
+            // Paso 2: Subir archivo directamente a S3
+            resultDiv.innerHTML = '<div class="loading">Subiendo archivo...</div>';
+            const uploadResponse = await fetch(upload_url, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/pdf',
+                },
+                body: file
+            });
+
+            if (!uploadResponse.ok) {
+                throw new Error(`Error subiendo archivo: ${uploadResponse.status}`);
+            }
+
+            // Paso 3: Procesar PDF desde S3
+            resultDiv.innerHTML = '<div class="loading">Extrayendo información del PDF...</div>';
+            const processResponse = await fetch(`${API_BASE}/api/process-s3-pdf`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    file_key: file_key
+                })
+            });
+
+            const contentType = processResponse.headers.get('content-type');
+            if (!contentType || !contentType.includes('application/json')) {
+                const text = await processResponse.text();
+                console.error('Respuesta no JSON:', text);
+                throw new Error(`Error del servidor: ${processResponse.status}. Respuesta: ${text.substring(0, 200)}`);
+            }
+
+            const data = await processResponse.json();
+
+            if (processResponse.ok) {
                 showPDFResult(resultDiv, data.document);
                 fileInput.value = ''; // Reset form
             } else {
@@ -135,7 +193,7 @@ document.getElementById('reference-form').addEventListener('submit', async (e) =
         resultDiv.className = 'result';
 
         try {
-            const response = await fetch(`${API_BASE}/upload-multiple-references`, {
+            const response = await fetch(`${API_BASE}/api/upload-multiple-references`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -160,7 +218,7 @@ document.getElementById('reference-form').addEventListener('submit', async (e) =
         resultDiv.className = 'result';
 
         try {
-            const response = await fetch(`${API_BASE}/upload-reference`, {
+            const response = await fetch(`${API_BASE}/api/upload-reference`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
@@ -246,7 +304,7 @@ async function loadDocuments() {
     listDiv.innerHTML = '<div class="loading">Cargando documentos...</div>';
 
     try {
-        const response = await fetch(`${API_BASE}/documents`);
+        const response = await fetch(`${API_BASE}/api/documents`);
         const documents = await response.json();
 
         if (documents.length === 0) {
@@ -402,7 +460,7 @@ document.getElementById('references-pdf-form').addEventListener('submit', async 
     resultDiv.className = 'result';
 
     try {
-        const response = await fetch(`${API_BASE}/upload-references-pdf`, {
+        const response = await fetch(`${API_BASE}/api/upload-references-pdf`, {
             method: 'POST',
             body: formData
         });
@@ -422,6 +480,6 @@ document.getElementById('references-pdf-form').addEventListener('submit', async 
 
 // Download data
 function downloadData(format) {
-    window.location.href = `${API_BASE}/download/${format}`;
+    window.location.href = `${API_BASE}/api/download/${format}`;
 }
 

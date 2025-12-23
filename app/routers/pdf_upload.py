@@ -6,6 +6,7 @@ from app.models import Document
 from app.schemas import PDFUploadResponse, DocumentResponse, MultiplePDFsResponse
 from app.services.pdf_extractor import PDFExtractor
 from app.services.crossref_service import CrossRefService
+from app.middleware.rate_limiter import validate_pdf_size, validate_batch_size
 
 router = APIRouter(prefix="/api", tags=["PDF"])
 
@@ -22,6 +23,9 @@ async def upload_pdf(
     
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="El archivo debe ser un PDF")
+    
+    # Validar tamaño del archivo
+    validate_pdf_size(file)
     
     try:
         # Leer contenido del PDF
@@ -136,6 +140,9 @@ async def upload_multiple_pdfs(
     
     if not pdf_files:
         raise HTTPException(status_code=400, detail="No se encontraron archivos PDF válidos")
+    
+    # Validar tamaño del batch
+    validate_batch_size(pdf_files)
     
     processed_docs = []
     failed_count = 0

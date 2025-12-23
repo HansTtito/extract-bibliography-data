@@ -1,0 +1,17 @@
+# Ejemplo de archivo de variables para Terraform
+# Copiar a terraform.tfvars y editar con tus valores
+
+environment        = "sandbox"
+grobid_deployment  = "ec2"  # o "fargate"
+aws_region        = "us-east-1"
+project_name      = "bibliografia"
+crossref_email    = "tu-email@example.com"
+
+# Opcional: Usar VPC existente
+# vpc_id = "vpc-xxxxxxxxx"
+# private_subnets = ["subnet-xxxxx", "subnet-yyyyy"]
+# public_subnets = ["subnet-zzzzz"]
+
+# Opcional: Key pair para EC2
+# key_pair_name = "my-key-pair"
+

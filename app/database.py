@@ -20,5 +20,7 @@ def get_db():
 
 def init_db():
     """Initialize database tables"""
+    # Importar modelos para que se registren con Base
+    from app import models  # noqa
     Base.metadata.create_all(bind=engine)
 

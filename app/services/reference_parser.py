@@ -1,6 +1,7 @@
 import re
 from typing import Dict, Optional, List
 from app.utils.text_processing import extract_doi, extract_year, extract_isbn_issn, normalize_text
+from app.utils.patterns import BiblioPatterns, TextNormalizer
 
 
 class ReferenceParser:
@@ -10,16 +11,20 @@ class ReferenceParser:
         """Parsea una referencia bibliográfica y extrae información básica"""
         doc = {}
         
-        # Normalizar texto
+        # Normalizar texto y limpiar "REFERENCES" si está al inicio
         text = reference_text.strip()
+        text = TextNormalizer.clean_references_header(text)
         
         # Extraer DOI
         doi = extract_doi(text)
         if doi:
             doc['doi'] = doi
         
-        # Extraer año
-        year = extract_year(text)
+        # MEJORADO: Extraer año con método más preciso
+        year = self._extract_year_from_reference(text)
+        if not year:
+            # Fallback: usar método general
+            year = extract_year(text)
         if year:
             doc['ano'] = year
         
@@ -69,168 +74,192 @@ class ReferenceParser:
         
         return doc
     
+    def _extract_year_from_reference(self, text: str) -> Optional[int]:
+        """
+        Extrae año de la referencia con prioridad:
+        1. Año entre paréntesis: (2009)
+        2. Año seguido de punto: 2009.
+        3. Año en cualquier posición válida
+        """
+        # Prioridad 1: Año entre paréntesis (más confiable)
+        match = re.search(r'\((\d{4})\)', text)
+        if match:
+            year = int(match.group(1))
+            if 1900 <= year <= 2030:
+                return year
+        
+        # Prioridad 2: Año seguido de punto y espacio (formato común)
+        match = re.search(r'(\d{4})\.\s+[A-Z]', text)
+        if match:
+            year = int(match.group(1))
+            if 1900 <= year <= 2030:
+                return year
+        
+        # Prioridad 3: Año seguido de punto sin espacio
+        match = re.search(r'(\d{4})\.', text)
+        if match:
+            year = int(match.group(1))
+            if 1900 <= year <= 2030:
+                return year
+        
+        # Prioridad 4: Cualquier año válido en el texto
+        match = re.search(BiblioPatterns.YEAR_FULL, text)
+        if match:
+            year = int(match.group(1))
+            if 1900 <= year <= 2030:
+                return year
+        
+        return None
+    
     def _extract_authors(self, text: str) -> Optional[str]:
-        """Extrae autores de la referencia"""
-        # Patrón común: Apellido, Inicial., Apellido, Inicial., Año
-        # Ejemplo: "Nandor, G.F., Longwill, J.R., Webb, D.L., 2010"
+        """
+        Extrae TODOS los autores de la referencia
+        MEJORADO: Captura múltiples autores correctamente
+        """
+        # Limpiar texto: remover "REFERENCES" si está al inicio
+        text = TextNormalizer.clean_references_header(text)
         
-        # Buscar año para delimitar dónde terminan los autores
-        year_match = re.search(r'\b(19|20)\d{2}\b', text)
+        # MEJORADO: Buscar año entre paréntesis primero (más confiable)
+        # Formato: "Autor, I. (2009). Título..."
+        year_match = re.search(r'\((\d{4})\)', text)
         if not year_match:
-            return None
+            # Fallback: buscar año sin paréntesis
+            year_match = re.search(BiblioPatterns.YEAR_SHORT, text)
+            if not year_match:
+                return None
         
-        # Autores están antes del año
+        # Autores están ANTES del año
         authors_text = text[:year_match.start()].strip()
         
-        # Patrón para autores: Apellido, Inicial., Apellido, Inicial.
-        # Puede terminar en coma o punto antes del año
-        author_pattern = r'^([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?(?:,\s*[A-Z]\.?)+,?\s*)+'
-        match = re.match(author_pattern, authors_text)
-        if match:
-            authors = match.group(0).rstrip(',. ')
-            # Validar que tenga al menos un autor completo (Apellido, Inicial.)
-            if re.search(r'[A-Z][a-z]+,\s*[A-Z]\.', authors):
+        # Validar que no empiece con palabras inválidas
+        if BiblioPatterns.is_reference_section(authors_text) or BiblioPatterns.is_section(authors_text):
+            return None
+        
+        # MEJORADO: Capturar TODOS los autores con diferentes formatos
+        # Formato 1: "Apellido, Inicial., Apellido, Inicial., and Apellido, Inicial."
+        # Formato 2: "Apellido, Inicial., Apellido, Inicial., Apellido, Inicial."
+        
+        # Normalizar conectores
+        authors_text = authors_text.replace(' and ', ', ').replace(' y ', ', ')
+        
+        # Patrón mejorado: captura secuencia completa de autores
+        # Captura: "Apellido, I." o "Apellido, I.I." (múltiples iniciales)
+        author_pattern = r'([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?,\s*[A-Z]\.(?:\s*[A-Z]\.)*)'
+        
+        authors_found = re.findall(author_pattern, authors_text)
+        
+        if authors_found:
+            # Unir todos los autores encontrados
+            authors = ', '.join(authors_found)
+            # Limpiar espacios extra
+            authors = TextNormalizer.clean_multiple_spaces(authors)
+            # Validar que tenga al menos un autor completo
+            if re.search(BiblioPatterns.AUTHOR_VALID, authors):
                 return normalize_text(authors)
         
         # Patrón alternativo: buscar hasta el año, validando formato de autor
         if ',' in authors_text and len(authors_text) > 5:
             # Verificar que tenga formato de autor (al menos un "Apellido, Inicial")
             if re.search(r'[A-Z][a-z]+,\s*[A-Z]', authors_text):
-                return normalize_text(authors_text.rstrip(',. '))
+                authors = authors_text.rstrip(',. ')
+                authors = TextNormalizer.clean_references_header(authors)
+                authors = TextNormalizer.clean_multiple_spaces(authors)
+                if authors:
+                    return normalize_text(authors)
         
         return None
     
     def _extract_title(self, text: str) -> Optional[str]:
-        """Extrae título del documento"""
-        # Buscar título entre comillas
-        quoted = re.search(r'["\'](.+?)["\']', text)
+        """
+        Extrae título del documento
+        MEJORADO: Estrategia más simple y robusta
+        """
+        # 1. Buscar título entre comillas (más confiable)
+        quoted = re.search(BiblioPatterns.TITLE_QUOTED, text)
         if quoted:
             return quoted.group(1)
         
-        # Detectar si es capítulo de libro (tiene "In:")
-        in_pos = re.search(r'\bIn:\s*', text, re.IGNORECASE)
+        # 2. Buscar año para delimitar
+        year_match = re.search(r'\((\d{4})\)', text)
+        if not year_match:
+            year_match = re.search(r'(\d{4})\.\s', text)
         
-        # Buscar año
-        year_pos = re.search(r'\b(19|20)\d{2}\b', text)
-        if not year_pos:
+        if not year_match:
             return None
         
-        year_end = year_pos.end()
+        # 3. Título está después del año y punto
+        # Formato: "(2009). Título aquí. Revista Volumen"
+        after_year = text[year_match.end():].strip()
         
-        # El título SIEMPRE está DESPUÉS del año (formato estándar: Autores, Año. Título...)
-        # Buscar el punto después del año que separa año de título
-        after_year = text[year_end:].strip()
-        
-        # Si es capítulo de libro, el título está entre el año. y "In:"
-        if in_pos and in_pos.start() > year_end:
-            # Título del capítulo está entre año. y "In:"
-            title_candidate = text[year_end:in_pos.start()].strip()
-            # Limpiar punto inicial y espacios
-            title_candidate = re.sub(r'^[.\s]+', '', title_candidate)
-            # Validar que no sea formato de autor
-            if len(title_candidate) > 10 and not re.match(r'^[A-Z][a-z]+,\s*[A-Z]', title_candidate):
-                return title_candidate
+        # Buscar punto después del año
+        if not after_year.startswith('.'):
+            # Si no empieza con punto, buscar el primer punto
+            dot_match = re.search(r'\.\s+', after_year)
+            if dot_match:
+                after_year = after_year[dot_match.end():]
         else:
-            # Artículo normal: título después del año y punto
-            # Buscar el primer punto después del año (separador año-título)
-            dot_after_year = re.search(r'\.\s+', after_year)
-            if dot_after_year:
-                # Título está después del punto
-                title_start = year_end + dot_after_year.end()
-                title_text = text[title_start:].strip()
-                
-                # El título termina generalmente en un punto seguido de espacio y mayúscula (inicio de revista)
-                # O en "In:" para capítulos
-                # O en "pp." para páginas
-                # Patrón más específico: punto seguido de espacio y palabra corta en mayúsculas (revista abreviada)
-                # Ejemplo: "Biol. Conserv." o "J. Exp. Mar. Biol. Ecol."
-                
-                title_end_patterns = [
-                    r'\.\s+[A-Z][a-z]*\.\s+[A-Z]',  # Punto seguido de abreviatura de revista (ej: "Biol. Conserv")
-                    r'\.\s+[A-Z][a-z]+\s+\d+',  # Punto seguido de nombre de revista y volumen
-                    r'\.\s+In:',  # Capítulo
-                    r'\.\s+pp\.',  # Páginas
-                    r'\.\s+Available',  # Link
-                ]
-                
-                title_end_pos = len(title_text)
-                for pattern in title_end_patterns:
-                    match = re.search(pattern, title_text)
-                    if match and match.start() < title_end_pos:
-                        title_end_pos = match.start()
-                
-                if title_end_pos < len(title_text):
-                    title_candidate = title_text[:title_end_pos].strip()
-                else:
-                    # Buscar el último punto que probablemente termina el título
-                    # El título generalmente termina en punto, luego viene la revista
-                    # Buscar patrón: punto seguido de espacio y palabra corta en mayúsculas
-                    last_dot_match = list(re.finditer(r'\.\s+', title_text))
-                    if last_dot_match:
-                        # Tomar hasta el último punto (probable fin del título)
-                        last_dot = last_dot_match[-1]
-                        # Verificar que después del punto hay algo que parece revista
-                        after_last_dot = title_text[last_dot.end():].strip()
-                        if re.match(r'^[A-Z]', after_last_dot):  # Empieza con mayúscula (revista)
-                            title_candidate = title_text[:last_dot.start()].strip()
-                        else:
-                            # Si no, tomar hasta el primer punto
-                            title_match = re.match(r'^(.+?)\.\s+', title_text)
-                            title_candidate = title_match.group(1).strip() if title_match else title_text.strip()
-                    else:
-                        # Tomar todo hasta el final si no hay patrón claro
-                        title_candidate = title_text.strip()
-                
-                # Limpiar y validar
-                title_candidate = re.sub(r'^[.,;:\s]+', '', title_candidate)
-                # Validar que no sea formato de autor (no debe empezar con "Apellido, Inicial")
-                if (len(title_candidate) > 10 and 
-                    not re.match(r'^[A-Z][a-z]+,\s*[A-Z]', title_candidate) and
-                    not re.search(r'^[A-Z][a-z]+,\s*[A-Z][a-z]+,\s*[A-Z]', title_candidate)):
-                    return title_candidate
+            # Quitar punto inicial
+            after_year = after_year.lstrip('. ')
+        
+        # 4. CLAVE: Título termina cuando encuentra:
+        #    - Punto + Palabra corta (1-2 palabras) + Número
+        #    - Esto indica: "Título. Revista Vol"
+        
+        # Patrón: encuentra ". Palabra(s) Número"
+        # Ej: ". J. Mar. Syst. 78" o ". Marine Ecology 123"
+        title_end = re.search(
+            r'\.\s+([A-Z][\w\s\.\,&-]{1,50}?)\s+\d+',
+            after_year
+        )
+        
+        if title_end:
+            # Tomar solo hasta antes del punto que precede a la revista
+            title = after_year[:title_end.start()].strip()
+            return title if len(title) > 10 else None
+        
+        # 5. Fallback: tomar hasta el primer punto
+        first_dot = re.search(r'\.\s', after_year)
+        if first_dot:
+            title = after_year[:first_dot.start()].strip()
+            return title if len(title) > 10 else None
         
         return None
     
     def _extract_journal(self, text: str) -> Optional[str]:
-        """Extrae nombre de revista o lugar de publicación"""
-        # El formato es: Título. Revista Volumen, Páginas
-        # La revista viene DESPUÉS del título, generalmente seguida de un número (volumen)
-        
-        # Primero, intentar encontrar dónde termina el título
+        """
+        Extrae nombre de revista
+        MEJORADO: Más simple y directo
+        """
+        # 1. Primero extraer el título para saber dónde buscar
         title = self._extract_title(text)
-        if title:
-            # Buscar el título en el texto para saber dónde termina
-            title_pos = text.find(title)
-            if title_pos != -1:
-                # Buscar después del título
-                after_title = text[title_pos + len(title):].strip()
-                # La revista generalmente viene después de un punto y espacio
-                # Formato: "Título. Revista Volumen" o "Título. Revista, Volumen"
-                journal_match = re.search(r'\.\s+([A-ZÁÉÍÓÚÑ][A-Za-záéíóúñ\s&,\.]+?)(?:,\s*\d+|\s+\d+)', after_title)
-                if journal_match:
-                    journal = journal_match.group(1).strip()
-                    # Limpiar punto final si existe
-                    journal = journal.rstrip('.')
-                    # Validar que no sea muy largo (las revistas suelen ser cortas)
-                    if 2 < len(journal) < 100:
-                        return journal
+        if not title:
+            return None
         
-        # Fallback: buscar patrón común de revista después del año
-        # Formato: "Año. Título. Revista Volumen"
-        year_match = re.search(r'\d{4}\.', text)
-        if year_match:
-            # Buscar después del título (que termina en punto)
-            # Buscar patrón: ". Revista" seguido de número
-            after_year = text[year_match.end():]
-            # Buscar el último punto antes del volumen (ese punto termina el título)
-            # Luego viene la revista
-            journal_pattern = r'\.\s+([A-ZÁÉÍÓÚÑ][A-Za-záéíóúñ\s&,\.]+?)(?:,\s*\d+|\s+\d+)'
-            journal_match = re.search(journal_pattern, after_year)
-            if journal_match:
-                journal = journal_match.group(1).strip().rstrip('.')
-                # Validar que no sea muy largo y que parezca nombre de revista
-                if 2 < len(journal) < 100 and not re.search(r'\b(management|strategy|evaluation|applied|to|the|conservation|of|an|endangered|population|subject|incidental|take)\b', journal, re.IGNORECASE):
-                    return journal
+        # 2. Buscar dónde termina el título en el texto
+        title_pos = text.find(title)
+        if title_pos == -1:
+            return None
+        
+        # 3. Revista está después del título
+        after_title = text[title_pos + len(title):].strip()
+        
+        # 4. CLAVE: Revista es lo que está entre el punto y el número (volumen)
+        # Formato: ". Revista Volumen"
+        # Ej: ". J. Mar. Syst. 78" → "J. Mar. Syst."
+        
+        journal_match = re.search(
+            r'\.\s+([A-Z][\w\s\.\,&-]{1,50}?)\s+(\d+)',
+            after_title
+        )
+        
+        if journal_match:
+            journal = journal_match.group(1).strip()
+            # Limpiar punto final si existe
+            journal = journal.rstrip('.,')
+            
+            # Validar longitud razonable
+            if 3 < len(journal) < 60:
+                return journal
         
         return None
     

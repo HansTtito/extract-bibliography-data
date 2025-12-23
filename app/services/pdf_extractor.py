@@ -1,17 +1,51 @@
 import re
 import pdfplumber
+import logging
 from typing import Dict, Optional
 from io import BytesIO
+from app.services.grobid_service import GrobidService
 from app.utils.text_processing import extract_doi, extract_year, extract_isbn_issn, normalize_text
+from app.utils.patterns import BiblioPatterns
+
+logger = logging.getLogger(__name__)
 
 
 class PDFExtractor:
     """Servicio para extraer información bibliográfica de PDFs"""
     
+    def __init__(self):
+        self.grobid_service = GrobidService()
+    
     def extract(self, pdf_content: bytes) -> Dict[str, Optional[str]]:
-        """Extrae información bibliográfica de un PDF"""
+        """
+        Extrae información bibliográfica de un PDF
+        Estrategia: Intentar GROBID primero (si está disponible), luego fallback a regex
+        """
         doc = {}
         
+        # Intentar GROBID primero (opcional)
+        if self.grobid_service.use_grobid:
+            grobid_header = self.grobid_service.extract_header_from_pdf(pdf_content)
+            if grobid_header:
+                # Mapear campos de GROBID a formato interno
+                if 'title' in grobid_header:
+                    doc['titulo_original'] = normalize_text(grobid_header['title'])
+                if 'authors' in grobid_header:
+                    doc['autores'] = grobid_header['authors']
+                if 'year' in grobid_header:
+                    doc['ano'] = grobid_header['year']
+                if 'doi' in grobid_header:
+                    doc['doi'] = grobid_header['doi']
+                if 'abstract' in grobid_header:
+                    doc['resumen_abstract'] = normalize_text(grobid_header['abstract'])
+                
+                # Si GROBID extrajo información suficiente, usarla como base
+                if doc.get('titulo_original') or doc.get('autores'):
+                    logger.info("Usando metadata de GROBID como base")
+                    # Continuar con extracción adicional usando regex para campos faltantes
+                    # pero priorizar datos de GROBID
+        
+        # Continuar con extracción regex (complementa o reemplaza según lo que haya)
         try:
             with pdfplumber.open(BytesIO(pdf_content)) as pdf:
                 # Extraer texto de todas las páginas
@@ -49,19 +83,25 @@ class PDFExtractor:
                     doc['isbn_issn'] = isbn_issn
                 
                 # Intentar extraer título (generalmente en la primera página, en negrita o grande)
-                title = self._extract_title(pdf, full_text)
-                if title:
-                    doc['titulo_original'] = normalize_text(title)
+                # Solo si GROBID no lo extrajo
+                if 'titulo_original' not in doc:
+                    title = self._extract_title(pdf, full_text)
+                    if title:
+                        doc['titulo_original'] = normalize_text(title)
                 
                 # Intentar extraer autores (generalmente después del título o en metadata)
-                authors = self._extract_authors(full_text)
-                if authors:
-                    doc['autores'] = authors
+                # Solo si GROBID no los extrajo
+                if 'autores' not in doc:
+                    authors = self._extract_authors(full_text)
+                    if authors:
+                        doc['autores'] = authors
                 
                 # Intentar extraer abstract/resumen
-                abstract = self._extract_abstract(full_text)
-                if abstract:
-                    doc['resumen_abstract'] = normalize_text(abstract)
+                # Solo si GROBID no lo extrajo
+                if 'resumen_abstract' not in doc:
+                    abstract = self._extract_abstract(full_text)
+                    if abstract:
+                        doc['resumen_abstract'] = normalize_text(abstract)
                 
                 # Intentar extraer keywords
                 keywords = self._extract_keywords(full_text)
@@ -136,7 +176,7 @@ class PDFExtractor:
                     continue
                 
                 # No debe ser autor (patrón: Apellido, Inicial.)
-                if re.match(r'^[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?,\s*[A-Z]\.', line):
+                if re.match(BiblioPatterns.AUTHOR_FULL, line):
                     continue
                 
                 # No debe ser año solo

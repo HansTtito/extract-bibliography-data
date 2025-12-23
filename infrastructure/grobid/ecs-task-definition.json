@@ -1,0 +1,47 @@
+{
+  "family": "grobid-service",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "2048",
+  "containerDefinitions": [
+    {
+      "name": "grobid",
+      "image": "lfoppiano/grobid:0.7.3",
+      "memory": 2048,
+      "cpu": 512,
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8070,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        {
+          "name": "JAVA_OPTS",
+          "value": "-Xmx2g"
+        }
+      ],
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "curl -f http://localhost:8070/api/isalive || exit 1"
+        ],
+        "interval": 30,
+        "timeout": 10,
+        "retries": 3,
+        "startPeriod": 60
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/grobid-service",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "grobid"
+        }
+      }
+    }
+  ]
+}
+

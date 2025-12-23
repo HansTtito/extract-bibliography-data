@@ -1,0 +1,2 @@
+# Middleware para la aplicación
+

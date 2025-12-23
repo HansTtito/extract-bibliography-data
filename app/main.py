@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import init_db
-from app.routers import pdf_upload, reference_upload, documents, download, references_pdf_upload
+from app.routers import pdf_upload, reference_upload, documents, references_pdf_upload, s3_upload
 import os
 
 app = FastAPI(
@@ -24,12 +24,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Incluir routers
+# Incluir routers (download.router removido - va en Lambda separada)
 app.include_router(pdf_upload.router)
 app.include_router(reference_upload.router)
 app.include_router(references_pdf_upload.router)
 app.include_router(documents.router)
-app.include_router(download.router)
+app.include_router(s3_upload.router)
 
 # Servir archivos estáticos del frontend
 if os.path.exists("frontend/static"):
@@ -47,7 +47,11 @@ async def read_root():
 @app.on_event("startup")
 async def startup_event():
     """Inicializar base de datos al iniciar la aplicación"""
-    init_db()
+    try:
+        init_db()
+        print("✅ Base de datos inicializada correctamente")
+    except Exception as e:
+        print(f"⚠️ Error inicializando base de datos: {e}")
 
 
 @app.get("/health")

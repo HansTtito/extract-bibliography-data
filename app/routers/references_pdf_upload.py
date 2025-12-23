@@ -5,6 +5,7 @@ from app.schemas import MultipleReferencesResponse, DocumentResponse
 from app.services.references_pdf_extractor import ReferencesPDFExtractor
 from app.services.reference_parser import ReferenceParser
 from app.services.crossref_service import CrossRefService
+from app.middleware.rate_limiter import validate_pdf_size
 from app.models import Document
 import re
 
@@ -78,18 +79,49 @@ async def upload_references_pdf(
     if not file.filename.endswith('.pdf'):
         raise HTTPException(status_code=400, detail="El archivo debe ser un PDF")
     
+    # Validar tamaño del archivo
+    validate_pdf_size(file)
+    
     try:
         # Leer contenido del PDF
         pdf_content = await file.read()
         
         # Extraer todas las referencias del PDF
+        print(f"Procesando PDF: {file.filename}")
         references = references_extractor.extract_references(pdf_content)
         
         if not references:
-            raise HTTPException(
-                status_code=400, 
-                detail="No se pudieron extraer referencias del PDF. Verifica que el PDF contenga una sección de referencias."
-            )
+            # Intentar extraer texto completo para debug
+            import pdfplumber
+            from io import BytesIO
+            try:
+                with pdfplumber.open(BytesIO(pdf_content)) as pdf:
+                    total_text = ""
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            total_text += page_text + "\n"
+                    
+                    # Buscar cualquier indicio de referencias
+                    has_references_keyword = bool(re.search(r'references?|bibliography|literature\s+cited', total_text, re.IGNORECASE))
+                    has_year_pattern = bool(re.search(r'\b(19\d{2}|20[0-2]\d)\b', total_text))
+                    
+                    error_detail = "No se pudieron extraer referencias del PDF. "
+                    if not has_references_keyword:
+                        error_detail += "No se encontró una sección 'References' o 'Bibliography' explícita. "
+                    if not has_year_pattern:
+                        error_detail += "No se encontraron años (formato 19XX o 20XX) en el documento. "
+                    error_detail += "Verifica que el PDF contenga una sección de referencias bibliográficas."
+                    
+                    print(f"Debug - Tiene keyword de referencias: {has_references_keyword}")
+                    print(f"Debug - Tiene patrones de año: {has_year_pattern}")
+                    print(f"Debug - Longitud del texto: {len(total_text)}")
+                    
+            except Exception as debug_error:
+                print(f"Error en debug: {debug_error}")
+                error_detail = "No se pudieron extraer referencias del PDF. Verifica que el PDF contenga una sección de referencias."
+            
+            raise HTTPException(status_code=400, detail=error_detail)
         
         # Procesar cada referencia
         processed_docs = []
