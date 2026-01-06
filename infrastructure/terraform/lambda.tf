@@ -80,8 +80,8 @@ resource "aws_lambda_function" "main" {
     variables = {
       DATABASE_URL      = "postgresql://${aws_rds_cluster.main.master_username}:${aws_rds_cluster.main.master_password}@${aws_rds_cluster.main.endpoint}/${aws_rds_cluster.main.database_name}"
       CROSSREF_EMAIL    = var.crossref_email
-      USE_GROBID        = "true"
-      GROBID_URL        = var.grobid_deployment == "fargate" ? "http://${aws_lb.grobid[0].dns_name}:8070" : (var.grobid_deployment == "ec2" ? "http://${aws_instance.grobid[0].private_ip}:8070" : "")
+      USE_GROBID        = var.grobid_deployment == "ec2" ? "true" : "false"
+      GROBID_URL        = var.grobid_deployment == "ec2" ? "http://${aws_instance.grobid[0].private_ip}:8070" : ""
       GROBID_TIMEOUT    = "120"
       MAX_PDF_SIZE_MB   = "10"
       MAX_BATCH_COUNT   = "10"

@@ -34,12 +34,7 @@ output "rds_password" {
 
 output "grobid_url" {
   description = "URL de GROBID"
-  value       = var.grobid_deployment == "fargate" ? "http://${aws_lb.grobid[0].dns_name}:8070" : "http://${aws_instance.grobid[0].public_ip}:8070"
-}
-
-output "grobid_alb_dns" {
-  description = "DNS del ALB de GROBID (solo Fargate)"
-  value       = var.grobid_deployment == "fargate" ? aws_lb.grobid[0].dns_name : null
+  value       = var.grobid_deployment == "ec2" ? "http://${aws_instance.grobid[0].public_ip}:8070" : null
 }
 
 output "grobid_ec2_ip" {
