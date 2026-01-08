@@ -282,6 +282,86 @@ main {
     margin-top: 10px;
 }
 
+/* Banner de estado de procesamiento */
+.processing-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 20px;
+    z-index: 10000;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    display: none;
+}
+
+.processing-banner.show {
+    display: block !important;
+    animation: slideDown 0.3s ease-out;
+}
+
+.processing-banner.analyzing {
+    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+}
+
+.processing-banner.completed {
+    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+}
+
+.processing-banner.error {
+    background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+}
+
+.processing-banner-content {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 15px;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+.processing-banner-icon {
+    font-size: 28px;
+    animation: pulse 2s infinite;
+}
+
+.processing-banner-text {
+    flex: 1;
+    text-align: center;
+}
+
+.processing-banner-progress {
+    font-size: 14px;
+    opacity: 0.9;
+    margin-top: 5px;
+}
+
+@keyframes slideDown {
+    from {
+        transform: translateY(-100%);
+    }
+    to {
+        transform: translateY(0);
+    }
+}
+
+@keyframes pulse {
+    0%, 100% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.1);
+    }
+}
+
+body.has-processing-banner {
+    padding-top: 100px;
+}
+
 @media (max-width: 768px) {
     header h1 {
         font-size: 2em;
@@ -303,6 +383,16 @@ main {
     .btn-success {
         margin-left: 0;
         margin-top: 10px;
+    }
+
+    .processing-banner-content {
+        font-size: 16px;
+        flex-direction: column;
+        gap: 10px;
+    }
+
+    .processing-banner-icon {
+        font-size: 24px;
     }
 }
 

@@ -5,6 +5,79 @@ const API_BASE = window.location.hostname.includes('cloudfront.net') || window.l
     ? 'https://rv11r9yo98.execute-api.us-east-1.amazonaws.com/sandbox'
     : '';
 
+// Funciones para manejar el banner de procesamiento
+function showProcessingBanner(status, message, progress = 0) {
+    const banner = document.getElementById('processing-banner');
+    const bannerIcon = document.getElementById('banner-icon');
+    const bannerText = document.getElementById('banner-text');
+    const bannerProgress = document.getElementById('banner-progress');
+    const body = document.body;
+    
+    if (!banner) {
+        console.error('Banner element not found!');
+        return;
+    }
+    
+    console.log('Showing banner:', { status, message, progress });
+    
+    // Remover clases anteriores
+    banner.classList.remove('analyzing', 'completed', 'error', 'show');
+    
+    // Configurar según estado
+    let icon = '⏳';
+    if (status === 'analyzing') {
+        banner.classList.add('analyzing');
+        icon = '🔍';
+    } else if (status === 'completed') {
+        banner.classList.add('completed');
+        icon = '✅';
+    } else if (status === 'failed' || status === 'error') {
+        banner.classList.add('error');
+        icon = '❌';
+    } else {
+        icon = '⏳';
+    }
+    
+    if (bannerIcon) bannerIcon.textContent = icon;
+    if (bannerText) bannerText.textContent = message;
+    
+    if (progress > 0) {
+        if (bannerProgress) bannerProgress.textContent = `Progreso: ${progress}%`;
+    } else {
+        if (bannerProgress) bannerProgress.textContent = '';
+    }
+    
+    // Forzar display block
+    banner.style.display = 'block';
+    banner.classList.add('show');
+    body.classList.add('has-processing-banner');
+    
+    console.log('Banner should be visible now');
+}
+
+function updateProcessingBanner(message, progress = null) {
+    const bannerText = document.getElementById('banner-text');
+    const bannerProgress = document.getElementById('banner-progress');
+    
+    if (bannerText) {
+        bannerText.textContent = message;
+    }
+    
+    if (bannerProgress && progress !== null) {
+        bannerProgress.textContent = `Progreso: ${progress}%`;
+    }
+}
+
+function hideProcessingBanner() {
+    const banner = document.getElementById('processing-banner');
+    const body = document.body;
+    
+    if (banner) {
+        banner.classList.remove('show');
+    }
+    body.classList.remove('has-processing-banner');
+}
+
 // Función para hacer fetch con reintentos automáticos
 async function fetchWithRetry(url, options = {}, maxRetries = 3, retryDelay = 1000) {
     let lastError;
@@ -142,9 +215,13 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
             for (let i = 0; i < files.length; i++) {
                 const file = files[i];
                 resultDiv.innerHTML = `<div class="loading">Procesando ${i + 1}/${files.length}: ${file.name}...</div>`;
+                
+                // Mostrar banner desde el inicio
+                showProcessingBanner('processing', `📤 Preparando archivo ${i + 1}/${files.length}: ${file.name}`, 0);
 
                 try {
                     // Paso 1: Obtener URL presignada (con reintentos)
+                    showProcessingBanner('processing', `🔗 Obteniendo URL de subida... ${i + 1}/${files.length}: ${file.name}`, 5);
                     const urlResponse = await fetchWithRetry(`${API_BASE}/api/get-upload-url`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -163,6 +240,7 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
 
                     // Paso 2: Subir a S3 (con reintentos, pero sin timeout muy corto para archivos grandes)
                     resultDiv.innerHTML = `<div class="loading">Subiendo ${i + 1}/${files.length}: ${file.name} a S3...</div>`;
+                    showProcessingBanner('processing', `📤 Subiendo a S3... ${i + 1}/${files.length}: ${file.name}`, 15);
                     const uploadResponse = await fetchWithRetry(upload_url, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/pdf' },
@@ -175,6 +253,7 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
 
                     // Paso 3: Iniciar procesamiento asíncrono (con reintentos)
                     resultDiv.innerHTML = `<div class="loading">Iniciando procesamiento ${i + 1}/${files.length}: ${file.name}...</div>`;
+                    showProcessingBanner('processing', `🚀 Iniciando procesamiento... ${i + 1}/${files.length}: ${file.name}`, 25);
                     const asyncResponse = await fetchWithRetry(`${API_BASE}/api/process-s3-pdf-async`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -215,9 +294,13 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
         const file = fileInput.files[0];
         resultDiv.innerHTML = '<div class="loading">Subiendo PDF a S3...</div>';
         resultDiv.className = 'result';
+        
+        // Mostrar banner desde el inicio
+        showProcessingBanner('processing', `📤 Preparando archivo: ${file.name}`, 0);
 
         try {
             // Paso 1: Obtener URL presignada (con reintentos)
+            showProcessingBanner('processing', `🔗 Obteniendo URL de subida... ${file.name}`, 5);
             const urlResponse = await fetchWithRetry(`${API_BASE}/api/get-upload-url`, {
                 method: 'POST',
                 headers: {
@@ -238,6 +321,7 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
 
             // Paso 2: Subir archivo directamente a S3 (con reintentos)
             resultDiv.innerHTML = '<div class="loading">Subiendo archivo...</div>';
+            showProcessingBanner('processing', `📤 Subiendo a S3... ${file.name}`, 15);
             const uploadResponse = await fetchWithRetry(upload_url, {
                 method: 'PUT',
                 headers: {
@@ -252,6 +336,7 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
 
             // Paso 3: Iniciar procesamiento asíncrono (con reintentos)
             resultDiv.innerHTML = '<div class="loading">Iniciando procesamiento...</div>';
+            showProcessingBanner('processing', `🚀 Iniciando procesamiento... ${file.name}`, 25);
             const asyncResponse = await fetchWithRetry(`${API_BASE}/api/process-s3-pdf-async`, {
                 method: 'POST',
                 headers: {
@@ -277,9 +362,11 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
                 showPDFResult(resultDiv, result.document);
                 fileInput.value = ''; // Reset form
             } else {
+                hideProcessingBanner();
                 showResult(resultDiv, result.error || 'Error procesando PDF', 'error');
             }
         } catch (error) {
+            hideProcessingBanner();
             showResult(resultDiv, `Error: ${error.message}`, 'error');
         }
     }
@@ -638,6 +725,9 @@ async function pollJobStatus(jobId, filename, currentIndex, totalFiles) {
     const maxAttempts = 300; // Máximo 5 minutos (300 * 1s)
     let attempts = 0;
     
+    // Mostrar banner inicial
+    showProcessingBanner('processing', `Procesando PDF ${currentIndex}/${totalFiles}: ${filename}`, 0);
+    
     while (attempts < maxAttempts) {
         try {
             const response = await fetchWithRetry(`${API_BASE}/api/job-status/${jobId}`, {
@@ -645,35 +735,37 @@ async function pollJobStatus(jobId, filename, currentIndex, totalFiles) {
             }, 2, 500); // Menos reintentos para polling (ya es repetitivo)
             
             const job = await response.json();
+            const progressPercent = job.progress || 0;
             
-            // Actualizar mensaje de progreso
+            // Determinar icono y mensaje según estado
+            let status, statusText;
+            if (job.status === 'analyzing') {
+                status = 'analyzing';
+                statusText = `🔍 Analizando contenido del PDF... ${currentIndex}/${totalFiles}: ${filename}`;
+            } else if (job.status === 'processing') {
+                status = 'processing';
+                statusText = `⏳ Descargando PDF... ${currentIndex}/${totalFiles}: ${filename}`;
+            } else if (job.status === 'completed') {
+                status = 'completed';
+                statusText = `✅ Procesamiento completado: ${filename}`;
+            } else if (job.status === 'failed') {
+                status = 'error';
+                statusText = `❌ Error procesando: ${filename}`;
+            } else {
+                status = 'processing';
+                statusText = `⏸️ Esperando procesamiento... ${currentIndex}/${totalFiles}: ${filename}`;
+            }
+            
+            // Actualizar banner
+            showProcessingBanner(status, statusText, progressPercent);
+            
+            // También actualizar el div de resultados (para compatibilidad)
             const progressDiv = document.getElementById('pdf-result');
             if (progressDiv) {
-                const progressPercent = job.progress || 0;
-                
-                // Determinar icono y mensaje según estado
-                let statusIcon, statusText;
-                if (job.status === 'analyzing') {
-                    statusIcon = '🔍';
-                    statusText = 'Analizando contenido del PDF...';
-                } else if (job.status === 'processing') {
-                    statusIcon = '⏳';
-                    statusText = 'Procesando...';
-                } else if (job.status === 'completed') {
-                    statusIcon = '✅';
-                    statusText = 'Completado';
-                } else if (job.status === 'failed') {
-                    statusIcon = '❌';
-                    statusText = 'Error';
-                } else {
-                    statusIcon = '⏸️';
-                    statusText = 'Pendiente';
-                }
-                
                 progressDiv.innerHTML = `
                     <div class="loading">
                         <div style="margin-bottom: 10px; font-size: 16px;">
-                            ${statusIcon} <strong>${statusText} ${currentIndex}/${totalFiles}: ${filename}</strong>
+                            <strong>${statusText}</strong>
                         </div>
                         <div style="width: 100%; background-color: #f0f0f0; border-radius: 4px; overflow: hidden; margin-bottom: 8px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);">
                             <div style="width: ${progressPercent}%; background: linear-gradient(90deg, #4CAF50 0%, #45a049 100%); height: 24px; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold;">
@@ -688,8 +780,12 @@ async function pollJobStatus(jobId, filename, currentIndex, totalFiles) {
             }
             
             if (job.status === 'completed') {
+                // Mantener banner de éxito por 2 segundos
+                setTimeout(() => hideProcessingBanner(), 2000);
                 return { success: true, document: job.document };
             } else if (job.status === 'failed') {
+                // Mantener banner de error por 5 segundos
+                setTimeout(() => hideProcessingBanner(), 5000);
                 return { success: false, error: job.error || 'Error desconocido' };
             }
             
@@ -705,11 +801,13 @@ async function pollJobStatus(jobId, filename, currentIndex, totalFiles) {
                 attempts++;
                 continue;
             }
+            hideProcessingBanner();
             return { success: false, error: error.message };
         }
     }
     
     // Timeout
+    hideProcessingBanner();
     return { success: false, error: 'Tiempo de espera agotado. El procesamiento puede continuar en segundo plano.' };
 }
 
@@ -717,6 +815,9 @@ async function pollJobStatus(jobId, filename, currentIndex, totalFiles) {
 async function pollReferencesJobStatus(jobId, resultDiv, fileInput) {
     const maxAttempts = 600; // Máximo 10 minutos (600 * 1s)
     let attempts = 0;
+    
+    // Mostrar banner inicial
+    showProcessingBanner('processing', '🔍 Extrayendo referencias bibliográficas del PDF...', 0);
     
     const progressBarId = 'references-progress-bar';
     const statusMessageId = 'references-status-message';
@@ -742,6 +843,23 @@ async function pollReferencesJobStatus(jobId, resultDiv, fileInput) {
             }
             
             const job = await response.json();
+            const progressPercent = job.progress || 0;
+            
+            // Actualizar banner
+            let status = 'processing';
+            let statusText = '🔍 Extrayendo referencias bibliográficas...';
+            
+            if (job.status === 'completed') {
+                status = 'completed';
+                statusText = '✅ Referencias extraídas exitosamente';
+            } else if (job.status === 'failed') {
+                status = 'error';
+                statusText = `❌ Error: ${job.error || 'Error desconocido'}`;
+            } else if (job.status === 'processing') {
+                statusText = '⏳ Procesando referencias...';
+            }
+            
+            showProcessingBanner(status, statusText, progressPercent);
             
             // Actualizar barra de progreso
             const progressBar = document.getElementById(progressBarId);
@@ -767,6 +885,8 @@ async function pollReferencesJobStatus(jobId, resultDiv, fileInput) {
             }
             
             if (job.status === 'completed') {
+                // Mantener banner de éxito por 2 segundos
+                setTimeout(() => hideProcessingBanner(), 2000);
                 if (job.result && job.result.success) {
                     showMultipleReferencesResult(resultDiv, job.result);
                     fileInput.value = ''; // Reset form
@@ -775,6 +895,8 @@ async function pollReferencesJobStatus(jobId, resultDiv, fileInput) {
                 }
                 return;
             } else if (job.status === 'failed') {
+                // Mantener banner de error por 5 segundos
+                setTimeout(() => hideProcessingBanner(), 5000);
                 showResult(resultDiv, job.error || 'Error procesando referencias', 'error');
                 return;
             }
@@ -791,6 +913,7 @@ async function pollReferencesJobStatus(jobId, resultDiv, fileInput) {
                 attempts++;
                 continue;
             }
+            hideProcessingBanner();
             showResult(resultDiv, `Error de polling: ${error.message}`, 'error');
             console.error('Polling error:', error);
             return;
@@ -798,6 +921,7 @@ async function pollReferencesJobStatus(jobId, resultDiv, fileInput) {
     }
     
     // Timeout
+    hideProcessingBanner();
     showResult(resultDiv, 'Tiempo de espera agotado. El procesamiento puede continuar en segundo plano.', 'warning');
 }
 
