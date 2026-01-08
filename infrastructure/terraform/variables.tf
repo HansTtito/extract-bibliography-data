@@ -65,3 +65,9 @@ variable "key_pair_name" {
   default     = ""
 }
 
+variable "anthropic_api_key" {
+  description = "API Key de Anthropic para Claude (opcional)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}

@@ -15,3 +15,5 @@ crossref_email    = "tu-email@example.com"
 # Opcional: Key pair para EC2
 # key_pair_name = "my-key-pair"
 
+# Opcional: Claude/Anthropic API Key para extracción de documentos no estándar
+# anthropic_api_key = "sk-ant-tu-api-key-aqui"

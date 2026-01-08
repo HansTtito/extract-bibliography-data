@@ -8,9 +8,26 @@ Remove-Item -Force lambda_function_export.zip -ErrorAction SilentlyContinue
 # Create temp directory
 New-Item -ItemType Directory -Force -Path lambda_package_export | Out-Null
 
-# Install dependencies using local pip (fallback)
-Write-Host "Installing dependencies..." -ForegroundColor Yellow
-pip install -r requirements-export.txt -t lambda_package_export --platform manylinux2014_x86_64 --only-binary=:all: --upgrade --no-cache-dir
+# Install dependencies using Docker
+Write-Host "Installing dependencies using Docker..." -ForegroundColor Yellow
+$currentPath = (Get-Location).Path
+$lambdaPackagePath = Join-Path $currentPath "lambda_package_export"
+$requirementsPath = Join-Path $currentPath "requirements-export.txt"
+
+# Convert Windows path to Docker volume format (lowercase drive letter)
+$dockerOutputPath = $lambdaPackagePath.ToLower().Replace('\', '/').Replace('c:', '/c')
+$dockerReqPath = $requirementsPath.ToLower().Replace('\', '/').Replace('c:', '/c')
+
+docker run --rm --entrypoint "" `
+    -v "${dockerOutputPath}:/output" `
+    -v "${dockerReqPath}:/tmp/requirements.txt" `
+    public.ecr.aws/lambda/python:3.11 `
+    pip install -r /tmp/requirements.txt -t /output --no-cache-dir
+
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "Docker install failed, falling back to local pip..." -ForegroundColor Yellow
+    pip install -r requirements-export.txt -t lambda_package_export --platform manylinux2014_x86_64 --only-binary=:all: --upgrade --no-cache-dir
+}
 
 # Copy application code (solo lo necesario para exports)
 Write-Host "Copying application code..." -ForegroundColor Yellow

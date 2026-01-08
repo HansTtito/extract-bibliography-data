@@ -41,20 +41,12 @@ $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 $projectRoot = Split-Path -Parent (Split-Path -Parent $scriptPath)
 Set-Location $projectRoot
 
-# Ejecutar build script de Lambda
-if (Test-Path "infrastructure\build_lambda.ps1") {
-    & "infrastructure\build_lambda.ps1"
-} else {
-    Write-Host "Creando package manualmente..." -ForegroundColor Yellow
-    New-Item -ItemType Directory -Force -Path "lambda_package" | Out-Null
-    Set-Location "lambda_package"
-    pip install -r ..\requirements.txt -t .
-    Copy-Item -Recurse ..\app .
-    Copy-Item ..\lambda_handler.py .
-    Set-Location ..
-    Compress-Archive -Path "lambda_package\*" -DestinationPath "lambda_function.zip" -Force
-    Remove-Item -Recurse -Force "lambda_package"
-}
+# Ejecutar build scripts de Lambda (main y export) desde la raíz del proyecto
+Write-Host "Building Main Lambda (without pandas)..." -ForegroundColor Cyan
+& "infrastructure\build_main_lambda.ps1"
+
+Write-Host "`nBuilding Export Lambda (with pandas)..." -ForegroundColor Cyan
+& "infrastructure\build_export_lambda.ps1"
 Write-Host "OK: Package de Lambda creado" -ForegroundColor Green
 Write-Host ""
 

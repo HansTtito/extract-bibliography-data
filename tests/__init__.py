@@ -1,2 +1,0 @@
-# Tests para la plataforma
-

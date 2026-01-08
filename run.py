@@ -12,7 +12,7 @@ if __name__ == "__main__":
         os.environ.setdefault("USE_GROBID", "true")
         os.environ.setdefault("GROBID_URL", "http://localhost:8070")
         os.environ.setdefault("DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/bibliografia")
-        print("🔧 Configuración local activada (GROBID + PostgreSQL local)")
+        print("Configuracion local activada (GROBID + PostgreSQL local)")
     
     # En la nube, usar el puerto proporcionado por la plataforma
     port = int(os.getenv("PORT", 8001))

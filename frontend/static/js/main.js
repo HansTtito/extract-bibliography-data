@@ -5,6 +5,68 @@ const API_BASE = window.location.hostname.includes('cloudfront.net') || window.l
     ? 'https://rv11r9yo98.execute-api.us-east-1.amazonaws.com/sandbox'
     : '';
 
+// Función para hacer fetch con reintentos automáticos
+async function fetchWithRetry(url, options = {}, maxRetries = 3, retryDelay = 1000) {
+    let lastError;
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        let timeoutId;
+        try {
+            // Crear AbortController para timeout (compatible con navegadores más antiguos)
+            const controller = new AbortController();
+            timeoutId = setTimeout(() => controller.abort(), 30000); // 30 segundos
+            
+            const response = await fetch(url, {
+                ...options,
+                signal: controller.signal
+            });
+            
+            clearTimeout(timeoutId);
+            
+            // Si la respuesta es exitosa, retornarla
+            if (response.ok) {
+                return response;
+            }
+            
+            // Si es un error 4xx (cliente), no reintentar
+            if (response.status >= 400 && response.status < 500) {
+                return response;
+            }
+            
+            // Para errores 5xx (servidor) o de red, reintentar
+            lastError = new Error(`HTTP ${response.status}: ${response.statusText}`);
+            
+        } catch (error) {
+            // Limpiar timeout si aún está activo
+            if (timeoutId) {
+                clearTimeout(timeoutId);
+            }
+            
+            lastError = error;
+            
+            // Si es un error de aborto (timeout), reintentar
+            if (error.name === 'AbortError' || error.name === 'TimeoutError') {
+                console.warn(`Intento ${attempt + 1}/${maxRetries} falló por timeout, reintentando...`);
+            } else if (error.name === 'TypeError' && (error.message.includes('fetch') || error.message.includes('network'))) {
+                // Error de red, reintentar
+                console.warn(`Intento ${attempt + 1}/${maxRetries} falló por error de red: ${error.message}, reintentando...`);
+            } else {
+                // Otro tipo de error, no reintentar
+                throw error;
+            }
+        }
+        
+        // Esperar antes del siguiente intento (backoff exponencial)
+        if (attempt < maxRetries - 1) {
+            const delay = retryDelay * Math.pow(2, attempt);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+    
+    // Si todos los reintentos fallaron, lanzar el último error
+    throw lastError || new Error('Error desconocido después de múltiples intentos');
+}
+
 // Tab switching
 function switchTab(tabName) {
     // Hide all tabs
@@ -69,31 +131,82 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
             formData.append('files', file);
         });
         
-        resultDiv.innerHTML = `<div class="loading">Procesando ${files.length} PDFs...</div>`;
+        resultDiv.innerHTML = `<div class="loading">Subiendo ${files.length} PDFs a S3...</div>`;
         resultDiv.className = 'result';
 
         try {
-            const response = await fetch(`${API_BASE}/api/upload-multiple-pdfs`, {
-                method: 'POST',
-                body: formData
-            });
+            const results = [];
+            let successCount = 0;
+            let failCount = 0;
 
-            // Verificar si la respuesta es JSON
-            const contentType = response.headers.get('content-type');
-            if (!contentType || !contentType.includes('application/json')) {
-                const text = await response.text();
-                console.error('Respuesta no JSON:', text);
-                throw new Error(`Error del servidor: ${response.status} ${response.statusText}. Respuesta: ${text.substring(0, 200)}`);
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                resultDiv.innerHTML = `<div class="loading">Procesando ${i + 1}/${files.length}: ${file.name}...</div>`;
+
+                try {
+                    // Paso 1: Obtener URL presignada (con reintentos)
+                    const urlResponse = await fetchWithRetry(`${API_BASE}/api/get-upload-url`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            filename: file.name,
+                            content_type: 'application/pdf'
+                        })
+                    }, 3, 1000);
+
+                    if (!urlResponse.ok) {
+                        const errorData = await urlResponse.json().catch(() => ({}));
+                        throw new Error(errorData.detail || 'Error obteniendo URL de upload');
+                    }
+
+                    const { upload_url, file_key } = await urlResponse.json();
+
+                    // Paso 2: Subir a S3 (con reintentos, pero sin timeout muy corto para archivos grandes)
+                    resultDiv.innerHTML = `<div class="loading">Subiendo ${i + 1}/${files.length}: ${file.name} a S3...</div>`;
+                    const uploadResponse = await fetchWithRetry(upload_url, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/pdf' },
+                        body: file
+                    }, 3, 2000); // Más tiempo entre reintentos para uploads
+
+                    if (!uploadResponse.ok) {
+                        throw new Error(`Error subiendo a S3: ${uploadResponse.status}`);
+                    }
+
+                    // Paso 3: Iniciar procesamiento asíncrono (con reintentos)
+                    resultDiv.innerHTML = `<div class="loading">Iniciando procesamiento ${i + 1}/${files.length}: ${file.name}...</div>`;
+                    const asyncResponse = await fetchWithRetry(`${API_BASE}/api/process-s3-pdf-async`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ file_key, filename: file.name })
+                    }, 3, 1000);
+
+                    if (!asyncResponse.ok) {
+                        const errorData = await asyncResponse.json().catch(() => ({}));
+                        throw new Error(errorData.detail || 'Error iniciando procesamiento');
+                    }
+
+                    const { job_id } = await asyncResponse.json();
+
+                    // Paso 4: Hacer polling para obtener resultado
+                    const result = await pollJobStatus(job_id, file.name, i + 1, files.length);
+                    
+                    if (result.success) {
+                        results.push({ filename: file.name, success: true, document: result.document });
+                        successCount++;
+                    } else {
+                        results.push({ filename: file.name, success: false, error: result.error });
+                        failCount++;
+                    }
+                } catch (error) {
+                    results.push({ filename: file.name, success: false, error: error.message });
+                    failCount++;
+                }
             }
 
-            const data = await response.json();
-
-            if (response.ok && data.success) {
-                showMultiplePDFsResult(resultDiv, data);
-                fileInput.value = ''; // Reset form
-            } else {
-                showResult(resultDiv, data.detail || 'Error procesando PDFs', 'error');
-            }
+            // Mostrar resultados
+            showMultiplePDFsResult(resultDiv, { success: true, results, successCount, failCount, total: files.length });
+            fileInput.value = ''; // Reset form
         } catch (error) {
             showResult(resultDiv, `Error: ${error.message}`, 'error');
         }
@@ -104,8 +217,8 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
         resultDiv.className = 'result';
 
         try {
-            // Paso 1: Obtener URL presignada
-            const urlResponse = await fetch(`${API_BASE}/api/get-upload-url`, {
+            // Paso 1: Obtener URL presignada (con reintentos)
+            const urlResponse = await fetchWithRetry(`${API_BASE}/api/get-upload-url`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -114,55 +227,57 @@ document.getElementById('pdf-form').addEventListener('submit', async (e) => {
                     filename: file.name,
                     content_type: 'application/pdf'
                 })
-            });
+            }, 3, 1000);
 
             if (!urlResponse.ok) {
-                const errorData = await urlResponse.json();
+                const errorData = await urlResponse.json().catch(() => ({}));
                 throw new Error(errorData.detail || 'Error obteniendo URL de upload');
             }
 
             const { upload_url, file_key } = await urlResponse.json();
 
-            // Paso 2: Subir archivo directamente a S3
+            // Paso 2: Subir archivo directamente a S3 (con reintentos)
             resultDiv.innerHTML = '<div class="loading">Subiendo archivo...</div>';
-            const uploadResponse = await fetch(upload_url, {
+            const uploadResponse = await fetchWithRetry(upload_url, {
                 method: 'PUT',
                 headers: {
                     'Content-Type': 'application/pdf',
                 },
                 body: file
-            });
+            }, 3, 2000); // Más tiempo entre reintentos para uploads
 
             if (!uploadResponse.ok) {
                 throw new Error(`Error subiendo archivo: ${uploadResponse.status}`);
             }
 
-            // Paso 3: Procesar PDF desde S3
-            resultDiv.innerHTML = '<div class="loading">Extrayendo información del PDF...</div>';
-            const processResponse = await fetch(`${API_BASE}/api/process-s3-pdf`, {
+            // Paso 3: Iniciar procesamiento asíncrono (con reintentos)
+            resultDiv.innerHTML = '<div class="loading">Iniciando procesamiento...</div>';
+            const asyncResponse = await fetchWithRetry(`${API_BASE}/api/process-s3-pdf-async`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
-                    file_key: file_key
+                    file_key: file_key,
+                    filename: file.name
                 })
-            });
+            }, 3, 1000);
 
-            const contentType = processResponse.headers.get('content-type');
-            if (!contentType || !contentType.includes('application/json')) {
-                const text = await processResponse.text();
-                console.error('Respuesta no JSON:', text);
-                throw new Error(`Error del servidor: ${processResponse.status}. Respuesta: ${text.substring(0, 200)}`);
+            if (!asyncResponse.ok) {
+                const errorData = await asyncResponse.json().catch(() => ({}));
+                throw new Error(errorData.detail || 'Error iniciando procesamiento');
             }
 
-            const data = await processResponse.json();
+            const { job_id } = await asyncResponse.json();
+            
+            // Paso 4: Hacer polling para obtener resultado
+            const result = await pollJobStatus(job_id, file.name, 1, 1);
 
-            if (processResponse.ok) {
-                showPDFResult(resultDiv, data.document);
+            if (result.success) {
+                showPDFResult(resultDiv, result.document);
                 fileInput.value = ''; // Reset form
             } else {
-                showResult(resultDiv, data.detail || 'Error procesando PDF', 'error');
+                showResult(resultDiv, result.error || 'Error procesando PDF', 'error');
             }
         } catch (error) {
             showResult(resultDiv, `Error: ${error.message}`, 'error');
@@ -194,13 +309,13 @@ document.getElementById('reference-form').addEventListener('submit', async (e) =
         resultDiv.className = 'result';
 
         try {
-            const response = await fetch(`${API_BASE}/api/upload-multiple-references`, {
+            const response = await fetchWithRetry(`${API_BASE}/api/upload-multiple-references`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ references: lines })
-            });
+            }, 3, 1000);
 
             const data = await response.json();
 
@@ -219,13 +334,13 @@ document.getElementById('reference-form').addEventListener('submit', async (e) =
         resultDiv.className = 'result';
 
         try {
-            const response = await fetch(`${API_BASE}/api/upload-reference`, {
+            const response = await fetchWithRetry(`${API_BASE}/api/upload-reference`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
                 body: JSON.stringify({ reference_text: referenceText })
-            });
+            }, 3, 1000);
 
             const data = await response.json();
 
@@ -275,7 +390,7 @@ function showReferenceResult(div, document, enriched) {
     let html = '<div class="result success">';
     html += '<strong>✓ Referencia procesada exitosamente</strong>';
     if (enriched) {
-        html += '<p style="color: #28a745; margin-top: 10px;">✓ Información enriquecida con CrossRef</p>';
+        html += '<p style="color: #28a745; margin-top: 10px; font-weight: bold;">🌐 Información verificada y enriquecida con CrossRef</p>';
     }
     html += '<div class="result-info">';
     html += `<h3>Documento #${document.numero_doc}</h3>`;
@@ -289,10 +404,25 @@ function showReferenceResult(div, document, enriched) {
         html += `<p><strong>Año:</strong> ${document.ano}</p>`;
     }
     if (document.lugar_publicacion_entrega) {
-        html += `<p><strong>Lugar de publicación:</strong> ${document.lugar_publicacion_entrega}</p>`;
+        html += `<p><strong>Revista/Publicación:</strong> ${document.lugar_publicacion_entrega}</p>`;
+    }
+    if (document.publicista_editorial) {
+        html += `<p><strong>Editorial:</strong> ${document.publicista_editorial}</p>`;
+    }
+    if (document.volumen_edicion) {
+        html += `<p><strong>Volumen:</strong> ${document.volumen_edicion}</p>`;
+    }
+    if (document.paginas) {
+        html += `<p><strong>Páginas:</strong> ${document.paginas}</p>`;
     }
     if (document.doi) {
-        html += `<p><strong>DOI:</strong> ${document.doi}</p>`;
+        html += `<p><strong>DOI:</strong> <a href="https://doi.org/${document.doi}" target="_blank">${document.doi}</a></p>`;
+    }
+    if (document.tipo_documento) {
+        html += `<p><strong>Tipo:</strong> ${document.tipo_documento}</p>`;
+    }
+    if (document.peer_reviewed) {
+        html += `<p><strong>Peer-reviewed:</strong> ${document.peer_reviewed}</p>`;
     }
     html += '</div></div>';
     div.innerHTML = html;
@@ -305,7 +435,10 @@ async function loadDocuments() {
     listDiv.innerHTML = '<div class="loading">Cargando documentos...</div>';
 
     try {
-        const response = await fetch(`${API_BASE}/api/documents`);
+        // Solicitar hasta 1000 documentos para asegurar que se muestren todos
+        const response = await fetchWithRetry(`${API_BASE}/api/documents?limit=1000`, {
+            method: 'GET'
+        }, 3, 1000);
         const documents = await response.json();
 
         if (documents.length === 0) {
@@ -313,7 +446,9 @@ async function loadDocuments() {
             return;
         }
 
-        let html = '';
+        // Mostrar contador de documentos
+        let html = `<div class="documents-count"><p><strong>Total de documentos: ${documents.length}</strong></p></div>`;
+        
         documents.forEach(doc => {
             html += '<div class="document-item">';
             html += `<h3>Documento #${doc.numero_doc}</h3>`;
@@ -373,70 +508,47 @@ function showMultipleReferencesResult(div, data) {
 }
 
 function showMultiplePDFsResult(div, data) {
-    let html = `<div class="success-message">
-        <h3>✅ ${data.message}</h3>
-        <p><strong>Total:</strong> ${data.total} PDFs | 
-           <strong>Procesados:</strong> ${data.processed} | 
-           <strong>Errores:</strong> ${data.failed}</p>
-    </div>`;
-
-    if (data.documents && data.documents.length > 0) {
-        html += '<div class="documents-list"><h4>Documentos creados:</h4><ul>';
-        data.documents.forEach(doc => {
-            html += `<li>
-                <strong>Documento #${doc.numero_doc}</strong><br>
-                ${doc.titulo_original ? `Título: ${doc.titulo_original.substring(0, 100)}${doc.titulo_original.length > 100 ? '...' : ''}<br>` : ''}
-                ${doc.autores ? `Autores: ${doc.autores}<br>` : ''}
-                ${doc.ano ? `Año: ${doc.ano}` : ''}
-            </li>`;
-        });
-        html += '</ul></div>';
-    }
-
-    if (data.errors && data.errors.length > 0) {
-        html += '<div class="error-message"><h4>Errores:</h4><ul>';
-        data.errors.forEach(error => {
-            html += `<li>${error}</li>`;
-        });
-        html += '</ul></div>';
-    }
-
-    div.innerHTML = html;
-    div.className = 'result success';
-}
-
-function showMultiplePDFsResult(div, data) {
     let html = '<div class="result success">';
     html += '<strong>✓ PDFs procesados exitosamente</strong>';
-    html += `<p style="margin-top: 10px;"><strong>Total:</strong> ${data.total} | <strong>Procesados:</strong> ${data.processed} | <strong>Errores:</strong> ${data.failed}</p>`;
+    html += `<p style="margin-top: 10px;"><strong>Total:</strong> ${data.total} | <strong>Exitosos:</strong> ${data.successCount} | <strong>Errores:</strong> ${data.failCount}</p>`;
     
-    if (data.documents && data.documents.length > 0) {
-        html += '<div class="result-info" style="margin-top: 15px;">';
-        html += '<h3>Documentos creados:</h3>';
-        data.documents.forEach(doc => {
-            html += '<div style="margin: 10px 0; padding: 10px; background: white; border-left: 3px solid #667eea; border-radius: 3px;">';
-            html += `<p><strong>Documento #${doc.numero_doc}</strong></p>`;
-            if (doc.titulo_original) {
-                html += `<p><strong>Título:</strong> ${doc.titulo_original.substring(0, 100)}${doc.titulo_original.length > 100 ? '...' : ''}</p>`;
-            }
-            if (doc.autores) {
-                html += `<p><strong>Autores:</strong> ${doc.autores}</p>`;
-            }
-            if (doc.ano) {
-                html += `<p><strong>Año:</strong> ${doc.ano}</p>`;
-            }
+    if (data.results && data.results.length > 0) {
+        // Separar exitosos de fallidos
+        const successResults = data.results.filter(r => r.success);
+        const failedResults = data.results.filter(r => !r.success);
+        
+        // Mostrar exitosos
+        if (successResults.length > 0) {
+            html += '<div class="result-info" style="margin-top: 15px;">';
+            html += '<h3>Documentos creados:</h3>';
+            successResults.forEach(result => {
+                const doc = result.document;
+                html += '<div style="margin: 10px 0; padding: 10px; background: white; border-left: 3px solid #667eea; border-radius: 3px;">';
+                html += `<p><strong>${result.filename}</strong></p>`;
+                html += `<p><strong>Documento #${doc.numero_doc}</strong></p>`;
+                if (doc.titulo_original) {
+                    html += `<p><strong>Título:</strong> ${doc.titulo_original.substring(0, 100)}${doc.titulo_original.length > 100 ? '...' : ''}</p>`;
+                }
+                if (doc.autores) {
+                    html += `<p><strong>Autores:</strong> ${doc.autores}</p>`;
+                }
+                if (doc.ano) {
+                    html += `<p><strong>Año:</strong> ${doc.ano}</p>`;
+                }
+                html += '</div>';
+            });
             html += '</div>';
-        });
-        html += '</div>';
-    }
-    
-    if (data.errors && data.errors.length > 0) {
-        html += '<div class="error-message" style="margin-top: 15px; padding: 10px; background: #fee; border-left: 3px solid #f00; border-radius: 3px;">';
-        html += '<h4>Errores:</h4><ul>';
-        data.errors.forEach(error => {
-            html += `<li>${error}</li>`;
-        });
-        html += '</ul></div>';
+        }
+        
+        // Mostrar errores
+        if (failedResults.length > 0) {
+            html += '<div class="error-message" style="margin-top: 15px; padding: 10px; background: #fee; border-left: 3px solid #f00; border-radius: 3px;">';
+            html += '<h4>Errores:</h4><ul>';
+            failedResults.forEach(result => {
+                html += `<li><strong>${result.filename}:</strong> ${result.error}</li>`;
+            });
+            html += '</ul></div>';
+        }
     }
     
     html += '</div>';
@@ -460,8 +572,8 @@ document.getElementById('references-pdf-form').addEventListener('submit', async 
     resultDiv.className = 'result';
 
     try {
-        // Paso 1: Obtener URL presignada
-        const urlResponse = await fetch(`${API_BASE}/api/get-upload-url`, {
+        // Paso 1: Obtener URL presignada (con reintentos)
+        const urlResponse = await fetchWithRetry(`${API_BASE}/api/get-upload-url`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -470,53 +582,224 @@ document.getElementById('references-pdf-form').addEventListener('submit', async 
                 filename: file.name,
                 content_type: 'application/pdf'
             })
-        });
+        }, 3, 1000);
 
         if (!urlResponse.ok) {
-            const errorData = await urlResponse.json();
+            const errorData = await urlResponse.json().catch(() => ({}));
             throw new Error(errorData.detail || 'Error obteniendo URL de upload');
         }
 
         const { upload_url, file_key } = await urlResponse.json();
 
-        // Paso 2: Subir archivo directamente a S3
+        // Paso 2: Subir archivo directamente a S3 (con reintentos)
         resultDiv.innerHTML = '<div class="loading">Subiendo archivo...</div>';
-        const uploadResponse = await fetch(upload_url, {
+        const uploadResponse = await fetchWithRetry(upload_url, {
             method: 'PUT',
             headers: {
                 'Content-Type': 'application/pdf',
             },
             body: file
-        });
+        }, 3, 2000); // Más tiempo entre reintentos para uploads
 
         if (!uploadResponse.ok) {
             throw new Error(`Error subiendo archivo: ${uploadResponse.status}`);
         }
 
-        // Paso 3: Procesar referencias desde S3
-        resultDiv.innerHTML = '<div class="loading">Extrayendo referencias del PDF...</div>';
-        const response = await fetch(`${API_BASE}/api/process-s3-references-pdf`, {
+        // Paso 3: Iniciar procesamiento asíncrono de referencias (con reintentos)
+        resultDiv.innerHTML = '<div class="loading">Iniciando extracción de referencias...</div>';
+        const processResponse = await fetchWithRetry(`${API_BASE}/api/process-s3-references-pdf-async`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-                file_key: file_key
+                file_key: file_key,
+                filename: file.name
             })
-        });
+        }, 3, 1000);
 
-        const data = await response.json();
-
-        if (response.ok && data.success) {
-            showMultipleReferencesResult(resultDiv, data);
-            fileInput.value = ''; // Reset form
-        } else {
-            showResult(resultDiv, data.detail || 'Error procesando PDF de referencias', 'error');
+        if (!processResponse.ok) {
+            const errorData = await processResponse.json().catch(() => ({}));
+            throw new Error(errorData.detail || 'Error iniciando procesamiento asíncrono');
         }
+
+        const { job_id } = await processResponse.json();
+        resultDiv.innerHTML = `<div class="loading">⏳ Extrayendo referencias del PDF (Job ID: ${job_id})...</div>`;
+
+        // Paso 4: Polling para el estado del job
+        await pollReferencesJobStatus(job_id, resultDiv, fileInput);
     } catch (error) {
         showResult(resultDiv, `Error: ${error.message}`, 'error');
     }
 });
+
+// Función para hacer polling del estado de un job
+async function pollJobStatus(jobId, filename, currentIndex, totalFiles) {
+    const maxAttempts = 300; // Máximo 5 minutos (300 * 1s)
+    let attempts = 0;
+    
+    while (attempts < maxAttempts) {
+        try {
+            const response = await fetchWithRetry(`${API_BASE}/api/job-status/${jobId}`, {
+                method: 'GET'
+            }, 2, 500); // Menos reintentos para polling (ya es repetitivo)
+            
+            const job = await response.json();
+            
+            // Actualizar mensaje de progreso
+            const progressDiv = document.getElementById('pdf-result');
+            if (progressDiv) {
+                const progressPercent = job.progress || 0;
+                
+                // Determinar icono y mensaje según estado
+                let statusIcon, statusText;
+                if (job.status === 'analyzing') {
+                    statusIcon = '🔍';
+                    statusText = 'Analizando contenido del PDF...';
+                } else if (job.status === 'processing') {
+                    statusIcon = '⏳';
+                    statusText = 'Procesando...';
+                } else if (job.status === 'completed') {
+                    statusIcon = '✅';
+                    statusText = 'Completado';
+                } else if (job.status === 'failed') {
+                    statusIcon = '❌';
+                    statusText = 'Error';
+                } else {
+                    statusIcon = '⏸️';
+                    statusText = 'Pendiente';
+                }
+                
+                progressDiv.innerHTML = `
+                    <div class="loading">
+                        <div style="margin-bottom: 10px; font-size: 16px;">
+                            ${statusIcon} <strong>${statusText} ${currentIndex}/${totalFiles}: ${filename}</strong>
+                        </div>
+                        <div style="width: 100%; background-color: #f0f0f0; border-radius: 4px; overflow: hidden; margin-bottom: 8px; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);">
+                            <div style="width: ${progressPercent}%; background: linear-gradient(90deg, #4CAF50 0%, #45a049 100%); height: 24px; transition: width 0.5s ease; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; font-weight: bold;">
+                                ${progressPercent}%
+                            </div>
+                        </div>
+                        <div style="font-size: 14px; color: #666; margin-top: 5px;">
+                            ${job.message || statusText}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            if (job.status === 'completed') {
+                return { success: true, document: job.document };
+            } else if (job.status === 'failed') {
+                return { success: false, error: job.error || 'Error desconocido' };
+            }
+            
+            // Esperar 1 segundo antes del siguiente intento
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            attempts++;
+            
+        } catch (error) {
+            // Si es un error de red, esperar un poco más y continuar
+            if (error.name === 'TypeError' && error.message.includes('fetch')) {
+                console.warn(`Error de red en polling (intento ${attempts + 1}), reintentando...`);
+                await new Promise(resolve => setTimeout(resolve, 2000)); // Esperar 2 segundos
+                attempts++;
+                continue;
+            }
+            return { success: false, error: error.message };
+        }
+    }
+    
+    // Timeout
+    return { success: false, error: 'Tiempo de espera agotado. El procesamiento puede continuar en segundo plano.' };
+}
+
+// Función para hacer polling del estado de un job de referencias
+async function pollReferencesJobStatus(jobId, resultDiv, fileInput) {
+    const maxAttempts = 600; // Máximo 10 minutos (600 * 1s)
+    let attempts = 0;
+    
+    const progressBarId = 'references-progress-bar';
+    const statusMessageId = 'references-status-message';
+    
+    // Crear elementos de progreso si no existen
+    if (!document.getElementById(progressBarId)) {
+        resultDiv.innerHTML = `
+            <div id="${statusMessageId}" class="loading">⏳ Extrayendo referencias...</div>
+            <div class="progress-bar-container" style="margin-top: 10px;">
+                <div class="progress-bar" id="${progressBarId}" style="width: 0%;"></div>
+            </div>
+        `;
+    }
+    
+    while (attempts < maxAttempts) {
+        try {
+            const response = await fetchWithRetry(`${API_BASE}/api/job-status/${jobId}`, {
+                method: 'GET'
+            }, 2, 500); // Menos reintentos para polling
+            
+            if (!response.ok) {
+                throw new Error('Error obteniendo estado del job');
+            }
+            
+            const job = await response.json();
+            
+            // Actualizar barra de progreso
+            const progressBar = document.getElementById(progressBarId);
+            if (progressBar) {
+                progressBar.style.width = `${job.progress}%`;
+                progressBar.textContent = `${job.progress}%`;
+            }
+            
+            // Actualizar mensaje de estado
+            const statusMessage = document.getElementById(statusMessageId);
+            if (statusMessage) {
+                const statusIcon = job.status === 'pending' ? '⏳' : 
+                                  job.status === 'processing' ? '⏳' : 
+                                  job.status === 'analyzing' ? '🔍' : 
+                                  job.status === 'completed' ? '✅' : 
+                                  job.status === 'failed' ? '❌' : '⏸️';
+                
+                statusMessage.innerHTML = `
+                    <span class="${job.status === 'completed' ? 'text-success' : job.status === 'failed' ? 'text-danger' : 'text-info'}">
+                        ${statusIcon} ${job.message || 'Procesando...'}
+                    </span>
+                `;
+            }
+            
+            if (job.status === 'completed') {
+                if (job.result && job.result.success) {
+                    showMultipleReferencesResult(resultDiv, job.result);
+                    fileInput.value = ''; // Reset form
+                } else {
+                    showResult(resultDiv, job.error || 'Error procesando referencias', 'error');
+                }
+                return;
+            } else if (job.status === 'failed') {
+                showResult(resultDiv, job.error || 'Error procesando referencias', 'error');
+                return;
+            }
+            
+            // Esperar 1 segundo antes del siguiente intento
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            attempts++;
+            
+        } catch (error) {
+            // Si es un error de red, esperar un poco más y continuar
+            if (error.name === 'TypeError' && error.message.includes('fetch')) {
+                console.warn(`Error de red en polling (intento ${attempts + 1}), reintentando...`);
+                await new Promise(resolve => setTimeout(resolve, 2000)); // Esperar 2 segundos
+                attempts++;
+                continue;
+            }
+            showResult(resultDiv, `Error de polling: ${error.message}`, 'error');
+            console.error('Polling error:', error);
+            return;
+        }
+    }
+    
+    // Timeout
+    showResult(resultDiv, 'Tiempo de espera agotado. El procesamiento puede continuar en segundo plano.', 'warning');
+}
 
 // Download data
 function downloadData(format) {

@@ -24,14 +24,20 @@ async def download_csv(db: Session = Depends(get_db)):
 @router.get("/download/excel")
 async def download_excel(db: Session = Depends(get_db)):
     """Descarga todos los documentos en formato Excel"""
-    export_service = ExportService(db)
-    excel_file = export_service.export_to_excel()
-    
-    return StreamingResponse(
-        excel_file,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=documentos.xlsx"}
-    )
+    try:
+        export_service = ExportService(db)
+        excel_file = export_service.export_to_excel()
+        
+        return StreamingResponse(
+            excel_file,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=documentos.xlsx"}
+        )
+    except Exception as e:
+        import traceback
+        error_detail = f"Error al generar archivo Excel: {str(e)}"
+        print(f"{error_detail}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 @router.get("/download/json")

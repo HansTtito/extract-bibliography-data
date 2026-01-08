@@ -1,7 +1,8 @@
 import pandas as pd
 import json
+import re
 from io import BytesIO
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from app.models import Document
 
@@ -28,14 +29,30 @@ class ExportService:
     
     def export_to_excel(self) -> BytesIO:
         """Exporta documentos a Excel"""
+        try:
         documents = self.get_all_documents()
         df = self._documents_to_dataframe(documents)
         
+        # Sanitizar datos antes de exportar a Excel
+        df = self._sanitize_dataframe_for_excel(df)
+            
+            # Asegurar que los nombres de columnas sean válidos para Excel
+            # Excel tiene límite de 255 caracteres para nombres de columnas
+            df.columns = [str(col)[:255] if len(str(col)) > 255 else str(col) for col in df.columns]
+        
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Documentos')
+                # Usar un nombre de hoja válido (máximo 31 caracteres, sin caracteres especiales)
+                sheet_name = 'Documentos'[:31]
+                df.to_excel(writer, index=False, sheet_name=sheet_name)
         output.seek(0)
         return output
+        except Exception as e:
+            # Log del error para debugging
+            import traceback
+            print(f"Error al exportar a Excel: {e}")
+            print(traceback.format_exc())
+            raise
     
     def export_to_json(self) -> str:
         """Exporta documentos a JSON"""
@@ -118,4 +135,77 @@ class ExportService:
             'acceso_abierto': doc.acceso_abierto,
             'full_text_asociado_base_datos': doc.full_text_asociado_base_datos
         }
+    
+    def _sanitize_text_for_excel(self, value: Any) -> Optional[str]:
+        """
+        Sanitiza texto para Excel eliminando caracteres problemáticos
+        
+        Args:
+            value: Valor a sanitizar (puede ser str, int, None, etc.)
+            
+        Returns:
+            String sanitizado o None
+        """
+        if value is None:
+            return None
+        
+        # Convertir a string si no lo es
+        if not isinstance(value, str):
+            value = str(value)
+        
+        # Excel tiene un límite de 32,767 caracteres por celda
+        # Truncar si es muy largo (dejar un margen)
+        MAX_EXCEL_CELL_LENGTH = 32000
+        if len(value) > MAX_EXCEL_CELL_LENGTH:
+            value = value[:MAX_EXCEL_CELL_LENGTH] + "... [truncado]"
+        
+        # Eliminar caracteres de control (excepto tab, newline, carriage return)
+        # Caracteres de control: 0x00-0x1F excepto 0x09 (tab), 0x0A (LF), 0x0D (CR)
+        value = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F]', '', value)
+        
+        # Eliminar caracteres no válidos para XML (que usa Excel)
+        # Caracteres no válidos en XML 1.0: 0x00-0x08, 0x0B, 0x0C, 0x0E-0x1F
+        # También eliminar caracteres sustitutos UTF-16 (0xD800-0xDFFF)
+        value = re.sub(r'[\uD800-\uDFFF]', '', value)
+        
+        # Normalizar saltos de línea: convertir \r\n y \r a \n
+        value = re.sub(r'\r\n|\r', '\n', value)
+        
+        # Reemplazar múltiples saltos de línea consecutivos por uno solo
+        value = re.sub(r'\n{3,}', '\n\n', value)
+        
+        # Eliminar espacios en blanco al inicio y final de cada línea
+        lines = value.split('\n')
+        value = '\n'.join(line.strip() for line in lines)
+        
+        # Eliminar espacios múltiples (más de 2 espacios seguidos)
+        value = re.sub(r' {3,}', '  ', value)
+        
+        # Limpiar espacios al inicio y final del texto completo
+        value = value.strip()
+        
+        # Retornar None si el string está vacío después de la limpieza
+        return value if value else None
+    
+    def _sanitize_dataframe_for_excel(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Sanitiza un DataFrame para exportación a Excel
+        
+        Args:
+            df: DataFrame a sanitizar
+            
+        Returns:
+            DataFrame sanitizado
+        """
+        df = df.copy()
+        
+        # Aplicar sanitización a todas las columnas de texto
+        for col in df.columns:
+            if df[col].dtype == 'object':  # Columnas de texto
+                df[col] = df[col].apply(self._sanitize_text_for_excel)
+        
+        # Reemplazar NaN y None con strings vacíos para Excel
+        df = df.fillna('')
+        
+        return df
 

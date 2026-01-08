@@ -76,3 +76,32 @@ class MultiplePDFsResponse(BaseModel):
     documents: List[DocumentResponse]
     errors: Optional[List[str]] = None
 
+
+class ProcessS3FileAsyncRequest(BaseModel):
+    file_key: str
+    filename: str
+
+
+class JobResponse(BaseModel):
+    job_id: str
+    status: str
+    progress: int
+    message: str
+    document: Optional[DocumentResponse] = None
+    error: Optional[str] = None
+    created_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+
+
+class ReferencesJobResponse(BaseModel):
+    """Response para jobs de procesamiento de referencias de PDF"""
+    job_id: str
+    status: str
+    progress: int
+    message: Optional[str] = None
+    result: Optional[MultipleReferencesResponse] = None
+    error: Optional[str] = None
+    created_at: str
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None

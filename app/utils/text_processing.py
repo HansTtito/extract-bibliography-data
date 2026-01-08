@@ -72,16 +72,49 @@ def extract_doi(text: str) -> Optional[str]:
 
 def extract_year(text: str) -> Optional[int]:
     """Extrae año de publicación (generalmente 4 dígitos entre 1900-2100)"""
-    # Buscar años completos de 4 dígitos
+    # PRIMERO: Buscar en formato de header de revista (más confiable)
+    # Ejemplo: "Invest. Mar., Valparaíso, 28: 39-52, 2000"
+    first_part = text[:2000]  # Solo primeras 2000 caracteres (donde suele estar el header)
+    header_year_patterns = [
+        r':\s*\d+[-\u2013\u2014]\d+,\s*(\d{4})',  # "28: 39-52, 2000"
+        r',\s*(\d{4})\s*$',  # Año al final de línea con formato de header
+        r'Vol\.?\s*\d+[,\s]+(\d{4})',  # "Vol. 28, 2000"
+    ]
+    
+    for pattern in header_year_patterns:
+        matches = list(re.finditer(pattern, first_part, re.MULTILINE))
+        if matches:
+            try:
+                # Tomar el último match (más probable que sea el año de publicación)
+                match = matches[-1]
+                year = int(match.group(1))
+                if 1900 <= year <= 2100:
+                    from datetime import datetime
+                    current_year = datetime.now().year
+                    if year <= current_year + 2:  # No más de 2 años en el futuro
+                        return year
+            except (ValueError, IndexError):
+                pass
+    
+    # SEGUNDO: Buscar años completos de 4 dígitos en todo el texto
     year_pattern = r'\b(19\d{2}|20\d{2})\b'
     matches = re.findall(year_pattern, text)
     if matches:
-        # Tomar el último año encontrado (más probable que sea el año de publicación)
         try:
-            # Convertir a int y validar rango razonable
-            year = int(matches[-1])
-            if 1900 <= year <= 2100:
-                return year
+            # Preferir años más recientes (más probable que sean de publicación)
+            years = [int(y) for y in matches if 1900 <= int(y) <= 2100]
+            if years:
+                from datetime import datetime
+                current_year = datetime.now().year
+                # Filtrar años futuros (más de 2 años adelante)
+                valid_years = [y for y in years if y <= current_year + 2]
+                if valid_years:
+                    # Ordenar y tomar el más reciente
+                    valid_years.sort()
+                    return valid_years[-1]
+                # Si no hay años válidos, tomar el más reciente de todos
+                years.sort()
+                return years[-1]
         except (ValueError, IndexError):
             pass
     return None

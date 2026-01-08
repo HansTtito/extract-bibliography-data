@@ -5,7 +5,7 @@ from typing import List, Dict, Optional
 from io import BytesIO
 from app.services.reference_parser import ReferenceParser
 from app.services.grobid_service import GrobidService
-from app.utils.patterns import BiblioPatterns, TextNormalizer
+from app.utils.patterns import BiblioPatterns, TextNormalizer, CleaningPatterns, SplitPatterns, ValidationPatterns
 from app.utils.text_processing import normalize_text_spacing
 
 logger = logging.getLogger(__name__)
@@ -23,29 +23,8 @@ class ReferencesPDFExtractor:
         Normaliza texto agregando espacios entre palabras concatenadas.
         CRÍTICO: Debe aplicarse ANTES de dividir referencias.
         """
-        # Normalizar espacios entre palabras concatenadas
-        text = normalize_text_spacing(text)
-        
-        # MEJORADO: Normalizar espacios después de comas en autores (ej: "Aguilera,V." -> "Aguilera, V.")
-        # Patrón más específico: Apellido,Inicial -> Apellido, Inicial
-        text = re.sub(r'([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}),([A-ZÁÉÍÓÚÑ])', r'\1, \2', text)
-        
-        # MEJORADO: Normalizar espacios después de comas en listas de autores
-        # Ej: "Aguilera,V.,Escribano,R." -> "Aguilera, V., Escribano, R."
-        text = re.sub(r'([a-záéíóúñ]),([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,})', r'\1, \2', text)
-        
-        # Normalizar espacios después de puntos seguidos de mayúscula
-        # Ej: "J.Mar.Syst" -> "J. Mar. Syst"
-        text = re.sub(r'([A-Z])\.([A-Z])', r'\1. \2', text)
-        
-        # MEJORADO: Normalizar palabras concatenadas comunes en títulos
-        # Ej: "Highfrequency" -> "High frequency", "nanoplanktonandmicroplankton" -> "nanoplankton and microplankton"
-        text = re.sub(r'([a-záéíóúñ])([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{3,})', r'\1 \2', text)
-        
-        # Limpiar espacios múltiples
-        text = re.sub(r'\s+', ' ', text).strip()
-        
-        return text
+        # Usar el normalizador centralizado
+        return TextNormalizer.normalize_text_spacing(text)
     
     def extract_references(self, pdf_content: bytes) -> List[str]:
         """
@@ -408,17 +387,13 @@ class ReferencesPDFExtractor:
         references = []
         
         # PASO 1: Normalizar saltos de línea
-        text = re.sub(r'\r\n', '\n', text)
-        text = re.sub(r'\r', '\n', text)
+        text = TextNormalizer.clean_line_breaks(text)
         
         # PASO 2: Normalizar espacios ANTES de dividir (CRÍTICO para palabras concatenadas)
         text = self._normalize_text_spacing(text)
         
         # PASO 3: Limpiar headers y footers comunes
-        text = re.sub(r'Frontiers in Marine Science.*?(?=\n|$)', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'Volume \d+.*?(?=\n|$)', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'Article \d+.*?(?=\n|$)', '', text, flags=re.IGNORECASE)
-        text = re.sub(r'www\.frontiersin\.org.*?(?=\n|$)', '', text, flags=re.IGNORECASE)
+        text = TextNormalizer.clean_headers_footers(text)
         
         # PASO 4: CLAVE - Detectar si todo está en una línea o múltiples líneas
         lines = text.split('\n')
@@ -438,11 +413,8 @@ class ReferencesPDFExtractor:
             # Debe estar precedido por el final de otra referencia (doi, páginas, etc.)
             # Usamos lookbehind negativo para NO capturar autores en medio de una referencia
             
-            # Buscar terminaciones de referencias (doi, páginas, año)
-            # Luego buscar el siguiente autor
-            pattern = r'(?:^|\.\s|\)\.?\s|doi:[^\s]+\s|[\d]+–[\d]+\.?\s)([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,},\s*[A-Z]\.)'
-            
-            matches = list(re.finditer(pattern, lines[0]))
+            # Usar patrón centralizado
+            matches = list(re.finditer(SplitPatterns.REF_START_FULL, lines[0]))
             print(f"  ✅ Encontrados {len(matches)} inicios de referencia potenciales")
             
             if matches and len(matches) > 1:  # Necesitamos al menos 2 para dividir
@@ -467,8 +439,7 @@ class ReferencesPDFExtractor:
             print(f"  ⚠️  Método 1 no funcionó, probando método alternativo...")
             
             # Método 2: Buscar patrón más simple - solo al inicio o después de punto/doi
-            simple_pattern = r'(?:^|\.doi:[^\s]+\s+|[\d]+–[\d]+\.\s+|[\d]{4}\)\.\s*)([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{3,},\s*[A-Z]\.)'
-            matches2 = list(re.finditer(simple_pattern, lines[0]))
+            matches2 = list(re.finditer(SplitPatterns.REF_START_SIMPLE, lines[0]))
             print(f"  Encontrados {len(matches2)} inicios (método 2)")
             
             if matches2 and len(matches2) > 1:
@@ -489,8 +460,7 @@ class ReferencesPDFExtractor:
             
             # Último recurso: dividir por años
             print(f"  ⚠️  Usando último recurso: dividir por años...")
-            year_pattern = r'(\(\d{4}\)|\s\d{4}[\.,])'
-            parts = re.split(year_pattern, lines[0])
+            parts = re.split(SplitPatterns.REF_SPLIT_YEAR, lines[0])
             print(f"  🔧 Dividiendo por años: {len(parts)} partes")
             
             # Reconstruir referencias juntando parte + año
@@ -530,7 +500,7 @@ class ReferencesPDFExtractor:
                 # Limpiar referencia actual si existe (no debe incluir "REFERENCES")
                 if current_ref:
                     ref_text = ' '.join(current_ref)
-                    ref_text = re.sub(r'\s+', ' ', ref_text).strip()
+                    ref_text = TextNormalizer.clean_multiple_spaces(ref_text)
                     if self._is_valid_reference(ref_text):
                         references.append(ref_text)
                     current_ref = []
@@ -597,20 +567,8 @@ class ReferencesPDFExtractor:
         Limpia basura al inicio de la referencia.
         Remueve frases comunes que aparecen antes de la referencia real.
         """
-        # Patrones de texto basura al inicio
-        garbage_patterns = [
-            r'^and\s+approved\s+the\s+submitted\s+version\.?\s*',
-            r'^submitted\s+version\.?\s*',
-            r'^approved\s+the\s+submitted\.?\s*',
-            r'^and\s+approved\.?\s*',
-            r'^REFERENCES\s+',
-            r'^References\s+',
-            r'^\.\s*',  # Punto al inicio
-            r'^,\s*',  # Coma al inicio
-        ]
-        
-        for pattern in garbage_patterns:
-            ref_text = re.sub(pattern, '', ref_text, flags=re.IGNORECASE).strip()
+        # Limpiar patrones de texto basura al inicio
+        ref_text = CleaningPatterns.clean_garbage_patterns(ref_text)
         
         # Buscar el primer patrón de autor válido y cortar todo lo anterior
         # Formato: "Apellido, Inicial." o "Apellido, Inicial.,"
@@ -652,7 +610,7 @@ class ReferencesPDFExtractor:
             return False
         
         # Criterio 5: No debe ser solo números o metadata
-        if re.match(r'^\d+$', ref_text) or re.match(r'^[A-Z\s]{1,30}$', ref_text):
+        if re.match(ValidationPatterns.ONLY_NUMBERS, ref_text) or re.match(ValidationPatterns.ONLY_UPPERCASE_SHORT, ref_text):
             return False
         
         # Criterio 6: No debe contener frases comunes de funding/acknowledgments

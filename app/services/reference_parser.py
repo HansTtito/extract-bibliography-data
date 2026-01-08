@@ -1,7 +1,7 @@
 import re
 from typing import Dict, Optional, List
 from app.utils.text_processing import extract_doi, extract_year, extract_isbn_issn, normalize_text
-from app.utils.patterns import BiblioPatterns, TextNormalizer
+from app.utils.patterns import BiblioPatterns, TextNormalizer, ExtractionPatterns
 
 
 class ReferenceParser:
@@ -78,33 +78,39 @@ class ReferenceParser:
         """
         Extrae año de la referencia con prioridad:
         1. Año entre paréntesis: (2009)
-        2. Año seguido de punto: 2009.
-        3. Año en cualquier posición válida
+        2. Año seguido de punto/coma: 2009. o 2009;
+        3. Año en cualquier posición válida (ignorando años en títulos)
         """
-        # Prioridad 1: Año entre paréntesis (más confiable)
-        match = re.search(r'\((\d{4})\)', text)
-        if match:
-            year = int(match.group(1))
-            if 1900 <= year <= 2030:
-                return year
+        # Buscar años con diferentes formatos (en orden de confiabilidad)
+        patterns = [
+            ExtractionPatterns.YEAR_PARENTHESIS,      # (2009) - más confiable
+            ExtractionPatterns.YEAR_SEMICOLON,        # 2009; - común con volumen
+            ExtractionPatterns.YEAR_DOT_SPACE,        # 2009. Title
+            ExtractionPatterns.YEAR_DOT,              # 2009.
+            ExtractionPatterns.YEAR_COMMA,            # 2009,
+        ]
         
-        # Prioridad 2: Año seguido de punto y espacio (formato común)
-        match = re.search(r'(\d{4})\.\s+[A-Z]', text)
-        if match:
-            year = int(match.group(1))
-            if 1900 <= year <= 2030:
-                return year
+        # Buscar con patrones específicos primero
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                year = int(match.group(1))
+                if 1900 <= year <= 2030:
+                    return year
         
-        # Prioridad 3: Año seguido de punto sin espacio
-        match = re.search(r'(\d{4})\.', text)
-        if match:
-            year = int(match.group(1))
-            if 1900 <= year <= 2030:
-                return year
-        
-        # Prioridad 4: Cualquier año válido en el texto
-        match = re.search(BiblioPatterns.YEAR_FULL, text)
-        if match:
+        # Último recurso: buscar cualquier año, pero IGNORAR años precedidos por palabras
+        # como "año", "year" que probablemente son parte del contenido/título
+        all_years = re.finditer(BiblioPatterns.YEAR_FULL, text)
+        for match in all_years:
+            # Verificar que no esté precedido por palabras que indican que es contenido
+            start_pos = match.start()
+            if start_pos > 5:
+                # Buscar 10 caracteres antes
+                context_before = text[max(0, start_pos - 10):start_pos].lower()
+                # Si viene después de "año", "year", ignorar este año
+                if any(word in context_before for word in ['año', 'year', 'desde', 'between']):
+                    continue
+            
             year = int(match.group(1))
             if 1900 <= year <= 2030:
                 return year
@@ -119,12 +125,25 @@ class ReferenceParser:
         # Limpiar texto: remover "REFERENCES" si está al inicio
         text = TextNormalizer.clean_references_header(text)
         
-        # MEJORADO: Buscar año entre paréntesis primero (más confiable)
-        # Formato: "Autor, I. (2009). Título..."
-        year_match = re.search(r'\((\d{4})\)', text)
+        # MEJORADO: Buscar año con diferentes formatos (en orden de confiabilidad)
+        # Formato 1: "(2009)" - más confiable
+        year_match = re.search(ExtractionPatterns.YEAR_PARENTHESIS, text)
+        
         if not year_match:
-            # Fallback: buscar año sin paréntesis
-            year_match = re.search(BiblioPatterns.YEAR_SHORT, text)
+            # Formato 2: "2009;" - común con volumen/páginas
+            year_match = re.search(ExtractionPatterns.YEAR_SEMICOLON, text)
+        
+        if not year_match:
+            # Formato 3: "2009." - estándar
+            year_match = re.search(ExtractionPatterns.YEAR_DOT, text)
+        
+        if not year_match:
+            # Formato 4: "2009," - menos común
+            year_match = re.search(ExtractionPatterns.YEAR_COMMA, text)
+        
+        if not year_match:
+            # Fallback: cualquier año de 4 dígitos
+            year_match = re.search(BiblioPatterns.YEAR_FULL, text)
             if not year_match:
                 return None
         
@@ -135,36 +154,53 @@ class ReferenceParser:
         if BiblioPatterns.is_reference_section(authors_text) or BiblioPatterns.is_section(authors_text):
             return None
         
-        # MEJORADO: Capturar TODOS los autores con diferentes formatos
-        # Formato 1: "Apellido, Inicial., Apellido, Inicial., and Apellido, Inicial."
-        # Formato 2: "Apellido, Inicial., Apellido, Inicial., Apellido, Inicial."
+        # CLAVE: Los autores terminan en el PRIMER punto seguido de espacio
+        # Esto separa autores del título: "Guerrero A, Arana P. Size structure..."
+        # Los autores son: "Guerrero A, Arana P"
+        first_period = re.search(r'\.\s+', authors_text)
+        if first_period:
+            # Tomar solo hasta el primer punto
+            authors_text = authors_text[:first_period.start()].strip()
         
-        # Normalizar conectores
+        # Si no hay punto, pero el texto es muy largo (>200 chars), probablemente incluye título
+        # En ese caso, tomar solo los primeros ~150 caracteres
+        if len(authors_text) > 200:
+            # Buscar una coma cercana al inicio que separe autores
+            last_comma = authors_text[:150].rfind(',')
+            if last_comma > 0:
+                authors_text = authors_text[:last_comma + 1].strip()
+        
+        # Normalizar conectores y "et al."
         authors_text = authors_text.replace(' and ', ', ').replace(' y ', ', ')
+        authors_text = re.sub(r',?\s*et\s+al\.?', '', authors_text)  # Remover "et al."
         
-        # Patrón mejorado: captura secuencia completa de autores
-        # Captura: "Apellido, I." o "Apellido, I.I." (múltiples iniciales)
-        author_pattern = r'([A-ZÁÉÍÓÚÑ][a-záéíóúñ]{2,}(?:\s+[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+)?,\s*[A-Z]\.(?:\s*[A-Z]\.)*)'
+        # Intentar primero con formato estándar: "Apellido, Inicial."
+        authors_found = re.findall(ExtractionPatterns.AUTHOR_PATTERN, authors_text)
         
-        authors_found = re.findall(author_pattern, authors_text)
+        # Si no encuentra con formato estándar, intentar formato sin coma: "Apellido Inicial"
+        if not authors_found or len(authors_found) == 0:
+            authors_found = re.findall(ExtractionPatterns.AUTHOR_PATTERN_NO_COMMA, authors_text)
+            # Normalizar a formato estándar (agregar comas)
+            if authors_found:
+                authors_found = [re.sub(r'([a-z]+)\s+([A-Z])', r'\1, \2', author) for author in authors_found]
         
         if authors_found:
             # Unir todos los autores encontrados
             authors = ', '.join(authors_found)
             # Limpiar espacios extra
             authors = TextNormalizer.clean_multiple_spaces(authors)
-            # Validar que tenga al menos un autor completo
-            if re.search(BiblioPatterns.AUTHOR_VALID, authors):
+            # Validar longitud mínima
+            if len(authors) > 3:
                 return normalize_text(authors)
         
-        # Patrón alternativo: buscar hasta el año, validando formato de autor
-        if ',' in authors_text and len(authors_text) > 5:
+        # Patrón alternativo: tomar todo el texto si parece ser solo autores
+        if ',' in authors_text and len(authors_text) < 150:
             # Verificar que tenga formato de autor (al menos un "Apellido, Inicial")
-            if re.search(r'[A-Z][a-z]+,\s*[A-Z]', authors_text):
+            if re.search(r'[A-Z][a-z]+,?\s*[A-Z]', authors_text):
                 authors = authors_text.rstrip(',. ')
                 authors = TextNormalizer.clean_references_header(authors)
                 authors = TextNormalizer.clean_multiple_spaces(authors)
-                if authors:
+                if len(authors) > 3:
                     return normalize_text(authors)
         
         return None
@@ -179,10 +215,20 @@ class ReferenceParser:
         if quoted:
             return quoted.group(1)
         
-        # 2. Buscar año para delimitar
-        year_match = re.search(r'\((\d{4})\)', text)
-        if not year_match:
-            year_match = re.search(r'(\d{4})\.\s', text)
+        # 2. Buscar año para delimitar (probar diferentes formatos)
+        year_match = None
+        year_patterns = [
+            ExtractionPatterns.YEAR_PARENTHESIS,
+            ExtractionPatterns.YEAR_SEMICOLON,
+            ExtractionPatterns.YEAR_DOT_SPACE,
+            ExtractionPatterns.YEAR_DOT,
+            ExtractionPatterns.YEAR_COMMA,
+        ]
+        
+        for pattern in year_patterns:
+            year_match = re.search(pattern, text)
+            if year_match:
+                break
         
         if not year_match:
             return None
@@ -194,7 +240,7 @@ class ReferenceParser:
         # Buscar punto después del año
         if not after_year.startswith('.'):
             # Si no empieza con punto, buscar el primer punto
-            dot_match = re.search(r'\.\s+', after_year)
+            dot_match = re.search(ExtractionPatterns.TITLE_END_DOT, after_year)
             if dot_match:
                 after_year = after_year[dot_match.end():]
         else:
@@ -207,10 +253,7 @@ class ReferenceParser:
         
         # Patrón: encuentra ". Palabra(s) Número"
         # Ej: ". J. Mar. Syst. 78" o ". Marine Ecology 123"
-        title_end = re.search(
-            r'\.\s+([A-Z][\w\s\.\,&-]{1,50}?)\s+\d+',
-            after_year
-        )
+        title_end = re.search(ExtractionPatterns.TITLE_END_JOURNAL, after_year)
         
         if title_end:
             # Tomar solo hasta antes del punto que precede a la revista
@@ -218,7 +261,7 @@ class ReferenceParser:
             return title if len(title) > 10 else None
         
         # 5. Fallback: tomar hasta el primer punto
-        first_dot = re.search(r'\.\s', after_year)
+        first_dot = re.search(ExtractionPatterns.TITLE_END_DOT, after_year)
         if first_dot:
             title = after_year[:first_dot.start()].strip()
             return title if len(title) > 10 else None
@@ -247,10 +290,7 @@ class ReferenceParser:
         # Formato: ". Revista Volumen"
         # Ej: ". J. Mar. Syst. 78" → "J. Mar. Syst."
         
-        journal_match = re.search(
-            r'\.\s+([A-Z][\w\s\.\,&-]{1,50}?)\s+(\d+)',
-            after_title
-        )
+        journal_match = re.search(ExtractionPatterns.JOURNAL_VOLUME, after_title)
         
         if journal_match:
             journal = journal_match.group(1).strip()
@@ -300,8 +340,7 @@ class ReferenceParser:
     
     def _extract_link(self, text: str) -> Optional[str]:
         """Extrae URL o link"""
-        url_pattern = r'https?://[^\s\)]+'
-        match = re.search(url_pattern, text)
+        match = re.search(ExtractionPatterns.URL_PATTERN, text)
         if match:
             return match.group(0)
         return None
@@ -309,7 +348,7 @@ class ReferenceParser:
     def _extract_book_title(self, text: str) -> Optional[str]:
         """Extrae título del libro para capítulos"""
         # Buscar "In:" seguido de editores y luego el título del libro
-        in_match = re.search(r'\bIn:\s*', text, re.IGNORECASE)
+        in_match = re.search(ExtractionPatterns.IN_BOOK, text, re.IGNORECASE)
         if not in_match:
             return None
         
@@ -317,7 +356,7 @@ class ReferenceParser:
         after_in = text[in_match.end():]
         
         # Buscar editores (formato: Apellido, Inicial. (Eds.),)
-        editors_match = re.search(r'\(Eds?\.\)', after_in, re.IGNORECASE)
+        editors_match = re.search(ExtractionPatterns.EDITORS, after_in, re.IGNORECASE)
         if editors_match:
             # Título del libro está después de los editores
             after_editors = after_in[editors_match.end():].strip()
@@ -326,13 +365,7 @@ class ReferenceParser:
             
             # El título del libro generalmente termina antes de "pp." o un punto seguido de número
             # O antes de "Available from:"
-            end_patterns = [
-                r'\s+pp\.',
-                r'\s+Available\s+from:',
-                r'\.\s+\d{4}',
-            ]
-            
-            for pattern in end_patterns:
+            for pattern in ExtractionPatterns.BOOK_TITLE_END:
                 end_match = re.search(pattern, after_editors, re.IGNORECASE)
                 if end_match:
                     book_title = after_editors[:end_match.start()].strip()

@@ -50,6 +50,21 @@ resource "aws_iam_role_policy" "lambda_policy" {
           "rds:DescribeDBInstances"
         ]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel"
+        ]
+        Resource = "arn:aws:bedrock:${var.aws_region}::foundation-model/anthropic.claude-*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:SendMessage",
+          "sqs:GetQueueUrl"
+        ]
+        Resource = aws_sqs_queue.pdf_processing.arn
       }
     ]
   })
@@ -74,7 +89,7 @@ resource "aws_lambda_function" "main" {
 
   s3_bucket = aws_s3_bucket.lambda_code.id
   s3_key    = aws_s3_object.lambda_code.key
-  source_code_hash = filebase64sha256("${path.module}/../../lambda_function.zip")
+  source_code_hash = base64sha256("${aws_s3_object.lambda_code.etag}-${aws_s3_object.lambda_code.version_id}")
 
   environment {
     variables = {
@@ -88,6 +103,16 @@ resource "aws_lambda_function" "main" {
       MAX_BATCH_TOTAL_MB = "50"
       S3_BUCKET         = aws_s3_bucket.pdfs.bucket
       ALLOWED_ORIGINS   = "https://${aws_cloudfront_distribution.frontend.domain_name}"
+      # Claude Configuration (AWS Bedrock)
+      # Nota: AWS_REGION es automática en Lambda, no se puede establecer manualmente
+      USE_CLAUDE        = "true"
+      CLAUDE_MODEL      = "anthropic.claude-3-haiku-20240307-v1:0"
+      CLAUDE_MAX_TOKENS = "2000"
+      CLAUDE_FOR_REPORTS = "true"
+      CLAUDE_FOR_THESIS = "true"
+      CLAUDE_FOR_BOOKS  = "true"
+      CLAUDE_AS_VALIDATOR = "false"
+      PDF_PROCESSING_QUEUE_URL = aws_sqs_queue.pdf_processing.url
     }
   }
 
@@ -99,7 +124,8 @@ resource "aws_lambda_function" "main" {
   depends_on = [
     aws_iam_role_policy_attachment.lambda_vpc,
     aws_cloudwatch_log_group.lambda,
-    aws_s3_object.lambda_code
+    aws_s3_object.lambda_code,
+    aws_sqs_queue.pdf_processing  # Asegurar que SQS existe antes de Lambda
   ]
 }
 
@@ -158,7 +184,7 @@ resource "aws_lambda_function" "export" {
 
   s3_bucket = aws_s3_bucket.lambda_code.id
   s3_key    = aws_s3_object.lambda_export_code.key
-  source_code_hash = filebase64sha256("${path.module}/../../lambda_function_export.zip")
+  source_code_hash = base64sha256("${aws_s3_object.lambda_export_code.etag}-${aws_s3_object.lambda_export_code.version_id}")
 
   environment {
     variables = {

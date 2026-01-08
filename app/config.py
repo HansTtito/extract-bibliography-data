@@ -20,6 +20,19 @@ class Settings(BaseSettings):
     # S3 bucket for PDF uploads
     s3_bucket: str = os.getenv("S3_BUCKET", "bibliografia-pdfs-sandbox-720081910880")
     
+    # Claude Configuration (AWS Bedrock)
+    use_claude: bool = os.getenv("USE_CLAUDE", "false").lower() == "true"
+    # AWS_REGION es automática en Lambda, usar boto3 para detectarla
+    aws_region: str = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION", "us-east-1")
+    claude_model: str = os.getenv("CLAUDE_MODEL", "anthropic.claude-3-haiku-20240307-v1:0")
+    claude_max_tokens: int = int(os.getenv("CLAUDE_MAX_TOKENS", "2000"))
+    
+    # Estrategia: qué documentos usar Claude
+    claude_for_reports: bool = os.getenv("CLAUDE_FOR_REPORTS", "true").lower() == "true"
+    claude_for_thesis: bool = os.getenv("CLAUDE_FOR_THESIS", "true").lower() == "true"
+    claude_for_books: bool = os.getenv("CLAUDE_FOR_BOOKS", "true").lower() == "true"
+    claude_as_validator: bool = os.getenv("CLAUDE_AS_VALIDATOR", "false").lower() == "true"
+    
     class Config:
         env_file = ".env"
         case_sensitive = False

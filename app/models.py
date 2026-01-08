@@ -1,4 +1,6 @@
-from sqlalchemy import Column, Integer, String, Text, Boolean
+from sqlalchemy import Column, Integer, String, Text, Boolean, DateTime, ForeignKey
+from sqlalchemy.dialects.postgresql import JSONB
+from datetime import datetime
 from app.database import Base
 
 
@@ -36,4 +38,21 @@ class Document(Base):
     peer_reviewed = Column(String(10))  # Peer-reviewed: "Sí" o "No"
     acceso_abierto = Column(String(10))  # Acceso abierto: "Sí" o "No"
     full_text_asociado_base_datos = Column(String(10))  # Full-text asociado a base de datos: "Sí" o "No"
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    
+    job_id = Column(String, primary_key=True)
+    file_key = Column(String, nullable=False)
+    filename = Column(String, nullable=False)
+    job_type = Column(String, default="pdf")  # "pdf" o "references"
+    status = Column(String, default="pending")  # pending, processing, completed, failed
+    progress = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    error = Column(Text, nullable=True)
+    document_id = Column(Integer, ForeignKey("documents.numero_doc"), nullable=True)
+    result = Column(JSONB, nullable=True)  # Para resultados complejos (múltiples documentos)
 

@@ -23,36 +23,69 @@ def _process_single_reference(ref_text: str, db: Session) -> tuple:
     original_title = parsed_data.get('titulo_original')
     original_authors = parsed_data.get('autores')
     enriched = False
+    crossref_data = None
     
-    # Intentar enriquecer con CrossRef
+    # MEJORADO: Intentar enriquecer con CrossRef
+    # Prioridad 1: Buscar por DOI (más preciso)
     if parsed_data.get('doi'):
+        print(f"🔍 Buscando en CrossRef por DOI: {parsed_data['doi']}")
         crossref_data = crossref_service.search_by_doi(parsed_data['doi'])
         if crossref_data:
-            priority_fields = ['lugar_publicacion_entrega', 'publicista_editorial', 
-                             'volumen_edicion', 'isbn_issn', 'link', 'peer_reviewed', 
-                             'acceso_abierto', 'resumen_abstract', 'keywords']
-            
-            for field in priority_fields:
-                if crossref_data.get(field):
-                    parsed_data[field] = crossref_data[field]
-            
-            if crossref_data.get('titulo_original'):
-                if (not original_title or len(original_title) < 20 or 
-                    original_title.count(',') > 3):
-                    parsed_data['titulo_original'] = crossref_data['titulo_original']
-                elif len(crossref_data['titulo_original']) > len(original_title or ''):
-                    parsed_data['titulo_original'] = crossref_data['titulo_original']
-            
-            if crossref_data.get('autores'):
-                if not original_authors or len(original_authors) < 10:
-                    parsed_data['autores'] = crossref_data['autores']
-                elif len(crossref_data['autores']) > len(original_authors or ''):
-                    parsed_data['autores'] = crossref_data['autores']
-            
-            if crossref_data.get('ano'):
+            print(f"✅ Encontrado en CrossRef por DOI")
+    
+    # Prioridad 2: Buscar por título y autores (si no hay DOI o no se encontró)
+    if not crossref_data and original_title and len(original_title) > 10:
+        print(f"🔍 Buscando en CrossRef por título: {original_title[:60]}...")
+        crossref_data = crossref_service.search_by_title_author(
+            title=original_title,
+            authors=original_authors
+        )
+        if crossref_data:
+            print(f"✅ Encontrado en CrossRef por título/autores")
+    
+    # Si encontramos datos en CrossRef, enriquecer
+    if crossref_data:
+        # Campos que siempre tomamos de CrossRef (más confiables)
+        priority_fields = [
+            'doi', 'link', 'isbn_issn', 'lugar_publicacion_entrega', 
+            'publicista_editorial', 'volumen_edicion', 'numero_articulo_capitulo_informe',
+            'paginas', 'tipo_documento', 'peer_reviewed', 'acceso_abierto'
+        ]
+        
+        for field in priority_fields:
+            if crossref_data.get(field):
+                parsed_data[field] = crossref_data[field]
+        
+        # Título: usar CrossRef si el parseado es malo o incompleto
+        if crossref_data.get('titulo_original'):
+            if (not original_title or len(original_title) < 20 or 
+                original_title.count(',') > 3):
+                parsed_data['titulo_original'] = crossref_data['titulo_original']
+            elif len(crossref_data['titulo_original']) > len(original_title or ''):
+                parsed_data['titulo_original'] = crossref_data['titulo_original']
+        
+        # Autores: usar CrossRef si el parseado es incompleto
+        if crossref_data.get('autores'):
+            if not original_authors or len(original_authors) < 10:
+                parsed_data['autores'] = crossref_data['autores']
+            elif len(crossref_data['autores']) > len(original_authors or ''):
+                parsed_data['autores'] = crossref_data['autores']
+        
+        # Año: preferir CrossRef si hay discrepancia
+        if crossref_data.get('ano'):
+            if not parsed_data.get('ano') or abs(crossref_data['ano'] - (parsed_data.get('ano') or 0)) <= 1:
                 parsed_data['ano'] = crossref_data['ano']
-            
-            enriched = True
+        
+        # Abstract y Keywords: solo de CrossRef (parser no los extrae de texto)
+        if crossref_data.get('resumen_abstract'):
+            parsed_data['resumen_abstract'] = crossref_data['resumen_abstract']
+        if crossref_data.get('keywords'):
+            parsed_data['keywords'] = crossref_data['keywords']
+        
+        enriched = True
+        print(f"✅ Referencia enriquecida con CrossRef")
+    else:
+        print(f"⚠️  No se encontró en CrossRef, usando datos del parser")
     
     # Obtener siguiente número de documento
     last_doc = db.query(Document).order_by(Document.numero_doc.desc()).first()
